@@ -71,6 +71,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="IR 最適化 (定数畳み込み・死コード除去など) を行う")
     ap.add_argument("--emit-ir", action="store_true",
                     help="コード生成の代わりに IR ダンプを標準出力へ")
+    ap.add_argument("--check", action="store_true",
+                    help="エラー検査のみ行い、何も出力しない "
+                         "(エディタの診断機能向け)")
     args = ap.parse_args(argv)
 
     in_path = Path(args.input)
@@ -81,6 +84,11 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     try:
+        if args.check:
+            # フロントエンドと IR 生成まで通せば全コンパイルエラーが
+            # 検出できる (バックエンドはユーザー起因のエラーを出さない)
+            compile_to_ir(source, optimize=False)
+            return 0
         if args.emit_ir:
             ir = compile_to_ir(source, args.optimize)
             sys.stdout.write(ir.dump())

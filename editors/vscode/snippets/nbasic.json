@@ -1,0 +1,147 @@
+{
+  "FOR ループ": {
+    "prefix": "for",
+    "body": [
+      "FOR ${1:I%} = ${2:1} TO ${3:10}",
+      "  $0",
+      "NEXT $1"
+    ],
+    "description": "FOR ... NEXT ループ"
+  },
+  "FOR ループ (STEP 付き)": {
+    "prefix": "forstep",
+    "body": [
+      "FOR ${1:I%} = ${2:10} TO ${3:0} STEP ${4:-1}",
+      "  $0",
+      "NEXT $1"
+    ],
+    "description": "FOR ... STEP ... NEXT ループ"
+  },
+  "IF ブロック": {
+    "prefix": "if",
+    "body": [
+      "IF ${1:条件} THEN",
+      "  $0",
+      "END IF"
+    ],
+    "description": "ブロック IF"
+  },
+  "IF / ELSE ブロック": {
+    "prefix": "ifelse",
+    "body": [
+      "IF ${1:条件} THEN",
+      "  $2",
+      "ELSE",
+      "  $0",
+      "END IF"
+    ],
+    "description": "IF ... ELSE ... END IF"
+  },
+  "WHILE ループ": {
+    "prefix": "while",
+    "body": [
+      "WHILE ${1:条件}",
+      "  $0",
+      "WEND"
+    ],
+    "description": "WHILE ... WEND ループ"
+  },
+  "DO ループ": {
+    "prefix": "do",
+    "body": [
+      "DO",
+      "  $0",
+      "LOOP UNTIL ${1:条件}"
+    ],
+    "description": "DO ... LOOP UNTIL ループ"
+  },
+  "SELECT CASE": {
+    "prefix": "select",
+    "body": [
+      "SELECT CASE ${1:式}",
+      "  CASE ${2:値}",
+      "    $3",
+      "  CASE ELSE",
+      "    $0",
+      "END SELECT"
+    ],
+    "description": "SELECT CASE ... END SELECT"
+  },
+  "SUB 定義": {
+    "prefix": "sub",
+    "body": [
+      "SUB ${1:名前} (${2:引数})",
+      "  $0",
+      "END SUB"
+    ],
+    "description": "SUB 定義"
+  },
+  "FUNCTION 定義": {
+    "prefix": "function",
+    "body": [
+      "FUNCTION ${1:名前}% (${2:引数})",
+      "  $1% = $0",
+      "END FUNCTION"
+    ],
+    "description": "FUNCTION 定義"
+  },
+  "ファイルを読むループ": {
+    "prefix": "openread",
+    "body": [
+      "OPEN ${1:\"input.txt\"} FOR INPUT AS #${2:1}",
+      "WHILE NOT EOF($2)",
+      "  LINE INPUT #$2, ${3:L\\$}",
+      "  $0",
+      "WEND",
+      "CLOSE #$2"
+    ],
+    "description": "OPEN ... FOR INPUT + EOF ループ"
+  },
+  "ファイルへ書き込み": {
+    "prefix": "openwrite",
+    "body": [
+      "OPEN ${1:\"output.txt\"} FOR OUTPUT AS #${2:1}",
+      "PRINT #$2, $0",
+      "CLOSE #$2"
+    ],
+    "description": "OPEN ... FOR OUTPUT + PRINT #"
+  },
+  "標準入力を EOF まで": {
+    "prefix": "stdin",
+    "body": [
+      "WHILE NOT EOF(0)",
+      "  LINE INPUT ${1:L\\$}",
+      "  $0",
+      "WEND"
+    ],
+    "description": "パイプ入力を最後まで処理する CLI の基本形"
+  },
+  "INKEY$ ゲームループ": {
+    "prefix": "gameloop",
+    "body": [
+      "DO",
+      "  K\\$ = INKEY\\$",
+      "  SELECT CASE K\\$",
+      "    CASE \"q\"",
+      "      EXIT DO",
+      "    CASE ${1:\"w\"}",
+      "      $0",
+      "  END SELECT",
+      "  SLEEP ${2:0.05}",
+      "LOOP"
+    ],
+    "description": "INKEY$ + SLEEP のゲームループ"
+  },
+  "GOSUB サブルーチン": {
+    "prefix": "gosub",
+    "body": [
+      "GOSUB ${1:MySub}",
+      "END",
+      "",
+      "$1:",
+      "  $0",
+      "RETURN"
+    ],
+    "description": "GOSUB / 名前ラベル / RETURN"
+  }
+}

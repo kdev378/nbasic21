@@ -1,0 +1,111 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "NBASIC-21",
+  "scopeName": "source.nbasic",
+  "patterns": [
+    { "include": "#comment-rem" },
+    { "include": "#comment-apostrophe" },
+    { "include": "#data-statement" },
+    { "include": "#string" },
+    { "include": "#line-number" },
+    { "include": "#label" },
+    { "include": "#keywords-control" },
+    { "include": "#keywords-declaration" },
+    { "include": "#keywords-io" },
+    { "include": "#keywords-operator" },
+    { "include": "#types" },
+    { "include": "#builtin-functions" },
+    { "include": "#number-hex" },
+    { "include": "#number" },
+    { "include": "#operators" },
+    { "include": "#identifier" }
+  ],
+  "repository": {
+    "comment-rem": {
+      "comment": "REM は行末までコメント (大文字小文字を区別しない)",
+      "match": "(?i)\\b(REM)\\b.*$",
+      "name": "comment.line.rem.nbasic"
+    },
+    "comment-apostrophe": {
+      "match": "'.*$",
+      "name": "comment.line.apostrophe.nbasic"
+    },
+    "data-statement": {
+      "comment": "DATA の項目は生テキストなので文字列として塗る",
+      "begin": "(?i)\\b(DATA)\\b",
+      "beginCaptures": {
+        "1": { "name": "keyword.other.data.nbasic" }
+      },
+      "end": "$",
+      "name": "meta.data.nbasic",
+      "patterns": [
+        { "include": "#string" },
+        { "match": ",", "name": "punctuation.separator.nbasic" },
+        { "match": "[^,\\s][^,]*", "name": "string.unquoted.data.nbasic" }
+      ]
+    },
+    "string": {
+      "begin": "\"",
+      "end": "\"(?!\")",
+      "name": "string.quoted.double.nbasic",
+      "patterns": [
+        { "match": "\"\"", "name": "constant.character.escape.nbasic" }
+      ]
+    },
+    "line-number": {
+      "comment": "物理行の先頭の整数は行番号ラベル",
+      "match": "^\\s*(\\d+)\\b",
+      "captures": {
+        "1": { "name": "constant.numeric.line-number.nbasic" }
+      }
+    },
+    "label": {
+      "comment": "物理行の先頭の `名前:` は名前ラベル",
+      "match": "^\\s*([A-Za-z_][A-Za-z0-9_]*)(:)",
+      "captures": {
+        "1": { "name": "entity.name.label.nbasic" },
+        "2": { "name": "punctuation.separator.label.nbasic" }
+      }
+    },
+    "keywords-control": {
+      "match": "(?i)\\b(IF|THEN|ELSEIF|ELSE|END\\s+(?:IF|SUB|FUNCTION|SELECT)|SELECT\\s+CASE|CASE\\s+ELSE|CASE|IS|FOR|TO|STEP|NEXT|WHILE|WEND|DO|LOOP|UNTIL|EXIT\\s+(?:FOR|WHILE|DO|SUB|FUNCTION)|GOTO|GOSUB|RETURN|END|STOP)\\b",
+      "name": "keyword.control.nbasic"
+    },
+    "keywords-declaration": {
+      "match": "(?i)\\b(DIM|AS|CONST|LET|SUB|FUNCTION|DECLARE|CALL|REDIM)\\b",
+      "name": "keyword.other.declaration.nbasic"
+    },
+    "keywords-io": {
+      "match": "(?i)\\b(PRINT|INPUT|LINE\\s+INPUT|READ|RESTORE|RANDOMIZE|SWAP|OPEN|CLOSE|OUTPUT|APPEND|CLS|LOCATE|COLOR|SLEEP)\\b",
+      "name": "keyword.other.io.nbasic"
+    },
+    "keywords-operator": {
+      "match": "(?i)\\b(AND|OR|XOR|NOT|MOD)\\b",
+      "name": "keyword.operator.word.nbasic"
+    },
+    "types": {
+      "match": "(?i)\\b(INTEGER|DOUBLE|STRING)\\b",
+      "name": "storage.type.nbasic"
+    },
+    "builtin-functions": {
+      "match": "(?i)\\b(ABS|SGN|INT|CINT|FIX|SQR|SIN|COS|TAN|ATN|LOG|EXP|RND|TIMER|LEN|ASC|VAL|INSTR|EOF|CHR\\$|STR\\$|LEFT\\$|RIGHT\\$|MID\\$|UCASE\\$|LCASE\\$|SPACE\\$|INKEY\\$|COMMAND\\$)",
+      "name": "support.function.builtin.nbasic"
+    },
+    "number-hex": {
+      "match": "(?i)&H[0-9A-F]+",
+      "name": "constant.numeric.hex.nbasic"
+    },
+    "number": {
+      "match": "(?i)\\b\\d+(\\.\\d*)?(E[+-]?\\d+)?[#!%]?|\\.\\d+(E[+-]?\\d+)?[#!]?",
+      "name": "constant.numeric.nbasic"
+    },
+    "operators": {
+      "match": "<=|>=|<>|[-+*/\\\\^=<>&#]",
+      "name": "keyword.operator.nbasic"
+    },
+    "identifier": {
+      "match": "[A-Za-z_][A-Za-z0-9_]*[%#!$]?",
+      "name": "variable.other.nbasic"
+    }
+  }
+}

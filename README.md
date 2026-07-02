@@ -55,8 +55,17 @@ Windows 上でセルフビルドする場合は最後のリンクを
 
 ```sh
 python3 -m nbasic --emit-ir -O program.bas   # 最適化後の IR を表示
+python3 -m nbasic --check program.bas        # エラー検査のみ (エディタ連携用)
 python3 -m nbasic -o out.c program.bas       # 出力ファイル名の指定
 ```
+
+### VS Code 拡張
+
+[editors/vscode/](editors/vscode/) にシンタックスハイライト・
+スニペット・**F5 でコンパイル & 実行**・保存時のエラー診断 (波線表示)・
+IR 表示コマンドを備えた拡張がある。インストール方法は
+[editors/vscode/README.md](editors/vscode/README.md) を参照
+(フォルダをコピーするだけでも入る)。
 
 ## 例
 
@@ -121,6 +130,7 @@ runtime/           C ランタイムライブラリ (両バックエンド共通
 examples/          サンプルプログラム
 docs/              言語仕様・内部設計
 tests/             統合テスト (ゴールデン + x64 クロス検証 + エラー)
+editors/vscode/    VS Code 拡張 (ハイライト・診断・F5 実行・IR 表示)
 ```
 
 ## テスト
