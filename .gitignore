@@ -1,0 +1,12 @@
+# Python
+__pycache__/
+*.pyc
+
+# コンパイラの生成物 (examples をその場でビルドしたときのゴミ)
+examples/*.c
+examples/*.asm
+examples/*.obj
+examples/*.exe
+examples/fizzbuzz
+examples/hello
+examples/sieve

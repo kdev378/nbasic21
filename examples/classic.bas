@@ -1,0 +1,25 @@
+100 REM ============================================
+110 REM classic.bas — 純・古典スタイルのデモ
+120 REM   行番号 / GOTO / GOSUB / DATA / READ
+130 REM ============================================
+140 PRINT "MENU OF THE DAY"
+150 RESTORE 400
+160 READ N%
+170 FOR I% = 1 TO N%
+180   READ DISH$, PRICE
+190   GOSUB 300
+200 NEXT I%
+210 TOTAL = TOTAL * 1.1
+220 PRINT "TOTAL (WITH TAX):"; TOTAL
+230 IF TOTAL > 20 THEN 260
+240 PRINT "CHEAP DAY!"
+250 GOTO 270
+260 PRINT "EXPENSIVE DAY!"
+270 END
+280 REM --- 小計サブルーチン ---
+300 PRINT DISH$; " ..."; PRICE
+310 TOTAL = TOTAL + PRICE
+320 RETURN
+390 REM --- データ ---
+400 DATA 3
+410 DATA RAMEN, 8.5, GYOZA, 4.25, RICE, 2
