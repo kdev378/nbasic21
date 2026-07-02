@@ -63,6 +63,7 @@ extern const int64_t     nb_data_count;
 /* ------------------------------------------------------------------ */
 
 void nb_end(void);                    /* END/STOP: 後始末して exit(0)  */
+void nb_end_code(int64_t code);       /* END 式: 指定コードで終了      */
 void nb_fatal(const char *msg);       /* 実行時エラー: 表示して exit(1) */
 void nb_fatal_bad_return(void);       /* GOSUB ディスパッチャの保険     */
 
@@ -71,14 +72,33 @@ void    nb_gosub_push(int64_t id);
 int64_t nb_gosub_pop(void);           /* 空なら "RETURN without GOSUB" */
 
 /* ------------------------------------------------------------------ */
-/* 出力 (PRINT)                                                        */
+/* 出力 (PRINT / PRINT #)                                              */
 /* ------------------------------------------------------------------ */
 
+/* PRINT 系はすべて「現在の出力チャネル」に書く。チャネル 0 = 画面、
+ * 1〜15 = OPEN したファイル。生成コードは PRINT #n の間だけ
+ * nb_set_channel(n) で切り替え、終わったら 0 に戻す。 */
+void nb_set_channel(int64_t n);
 void nb_print_i64(int64_t v);         /* 正数は先頭に空白、末尾に空白  */
 void nb_print_f64(double v);          /* %.15g 相当。同上の空白規則    */
 void nb_print_str(nb_str *s);
 void nb_print_tab(void);              /* `,` : 次の 14 桁ゾーンへ      */
 void nb_print_nl(void);               /* 改行                          */
+
+/* ------------------------------------------------------------------ */
+/* ファイル (OPEN/CLOSE/INPUT#/LINE INPUT#/EOF)                        */
+/* ------------------------------------------------------------------ */
+
+/* モードコード: 0 = INPUT (読み), 1 = OUTPUT (新規書き), 2 = APPEND
+ * (irgen.py の _g_OpenStmt と一致させること)。番号は 1〜15。 */
+void    nb_open(nb_str *path, int64_t mode, int64_t n);
+void    nb_close(int64_t n);          /* 開いていなければ何もしない    */
+void    nb_close_all(void);
+int64_t nb_eof(int64_t n);            /* 終端なら -1。n=0 は標準入力   */
+int64_t nb_finput_i64(int64_t n);     /* INPUT # の次の項目            */
+double  nb_finput_f64(int64_t n);
+nb_str *nb_finput_str(int64_t n);
+nb_str *nb_fline_input(int64_t n);    /* LINE INPUT # : 1 行丸ごと     */
 
 /* ------------------------------------------------------------------ */
 /* 入力 (INPUT) と DATA/READ                                           */
@@ -88,6 +108,7 @@ void    nb_input_begin(void);         /* "? " を表示して 1 行読み込む 
 int64_t nb_input_i64(void);           /* 行内の次のカンマ区切り値      */
 double  nb_input_f64(void);
 nb_str *nb_input_str(void);
+nb_str *nb_line_input(void);          /* LINE INPUT: 1 行丸ごと        */
 
 void    nb_restore(int64_t index);    /* DATA 読み取り位置の変更       */
 int64_t nb_read_i64(void);
@@ -119,6 +140,20 @@ double  nb_rnd(void);                    /* [0,1) の一様乱数           */
 void    nb_randomize(double seed);
 void    nb_randomize_timer(void);
 double  nb_timer(void);                  /* 深夜 0 時からの経過秒      */
+
+/* ------------------------------------------------------------------ */
+/* 端末制御 (TUI) と環境                                               */
+/* ------------------------------------------------------------------ */
+
+/* 画面制御は ANSI エスケープシーケンスで行う。Windows 10 以降の
+ * コンソールは起動時に VT モードを有効化する (nbrt.c の console_init)。 */
+void    nb_cls(void);                    /* 画面消去 + カーソル左上へ  */
+void    nb_locate(int64_t row, int64_t col);  /* 1 起点のカーソル移動  */
+void    nb_color(int64_t fg, int64_t bg);     /* QBasic 0-15。-1=不変  */
+void    nb_sleep(double seconds);        /* 小数秒の待機               */
+void    nb_waitkey(void);                /* キーが押されるまで待つ     */
+nb_str *nb_inkey(void);                  /* 押下済みキー 1 個か ""     */
+nb_str *nb_command(int64_t i);           /* コマンドライン引数 (§10.5) */
 
 /* ------------------------------------------------------------------ */
 /* 文字列操作                                                          */

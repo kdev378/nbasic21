@@ -8,6 +8,11 @@
 - **現代的機能**: ブロック `IF`/`ELSEIF`、`SELECT CASE`、`DO`/`LOOP`、
   `SUB`/`FUNCTION` (再帰・前方参照可)、ローカル変数、`CONST`、
   `EXIT` 文、名前ラベル、`AS INTEGER/DOUBLE/STRING` 型宣言
+- **CLI 向け**: ファイル入出力 (`OPEN`/`PRINT #`/`INPUT #`/
+  `LINE INPUT #`/`EOF`)、コマンドライン引数 (`COMMAND$`)、
+  終了コード (`END 式`)、標準入力の EOF 検査 (`EOF(0)`)
+- **TUI 向け**: `CLS`/`LOCATE`/`COLOR` (ANSI、Windows 10+ の VT モード
+  自動有効化)、ノンブロッキングキー入力 `INKEY$`、`SLEEP`
 - **2 つのバックエンド** (共通の三番地コード IR から生成):
   - **C** — 可搬。手元の cc でビルドしてどこでも実行
   - **x86-64** — Windows x64 (Microsoft 呼び出し規約) 向け NASM
@@ -87,7 +92,8 @@ END FUNCTION
 ```
 
 その他のサンプルは [examples/](examples/) を参照
-(エラトステネスのふるい、文字列ソート、数当てゲームなど)。
+(エラトステネスのふるい、文字列ソート、数当てゲーム、
+`wc` 風の CLI ツールなど)。
 
 ## ドキュメント
 

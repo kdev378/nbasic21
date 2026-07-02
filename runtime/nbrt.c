@@ -30,6 +30,21 @@
 #include <time.h>
 #include <inttypes.h>
 
+/* 端末制御 (INKEY$ / SLEEP / VT モード) だけは OS ごとの API が要る。
+ * それ以外のコードは完全に可搬な C99。 */
+#ifdef _WIN32
+#include <windows.h>
+#include <conio.h>      /* _kbhit / _getch */
+#include <io.h>         /* _isatty / _fileno */
+#define nb_isatty _isatty
+#define nb_fileno _fileno
+#else
+#include <unistd.h>     /* isatty / read */
+#include <termios.h>    /* 非カノニカルモード */
+#define nb_isatty isatty
+#define nb_fileno fileno
+#endif
+
 /* ================================================================== */
 /* アリーナアロケータ                                                  */
 /* ================================================================== */
@@ -104,7 +119,16 @@ void nb_end(void)
 {
     fflush(stdout);
     arena_free_all();
-    exit(0);
+    exit(0);   /* exit() が開いている全ストリームをフラッシュして閉じる */
+}
+
+void nb_end_code(int64_t code)
+{
+    /* END 式 — シェルから見える終了コードを指定する (仕様書 §6.8)。
+     * 移植性のため 0〜255 に切り詰める (POSIX の慣例)。 */
+    fflush(stdout);
+    arena_free_all();
+    exit((int)(code & 255));
 }
 
 /* ---- GOSUB スタック ------------------------------------------------ */
@@ -165,22 +189,53 @@ static nb_str *str_from_cstr(const char *p, size_t n)
 }
 
 /* ================================================================== */
-/* 出力 (PRINT)                                                        */
+/* 出力チャネル (PRINT / PRINT #)                                      */
 /* ================================================================== */
 
-/* PRINT のカンマ区切り (14 桁ゾーン) を実装するため、現在の桁位置を
- * 数えながら出力する。改行でゾーンはリセットされる。 */
-static int64_t out_col = 0;
+/* PRINT 系は「現在の出力チャネル」に書く。チャネル 0 は画面 (stdout)、
+ * 1〜NB_MAX_FILES は OPEN されたファイル。PRINT のカンマ区切り
+ * (14 桁ゾーン) を実装するため、桁位置はチャネルごとに数える。 */
+
+#define NB_MAX_FILES 15
+
+/* mode: 0 = 閉じている, 1 = 読み取り用, 2 = 書き込み用 */
+static FILE   *file_fp[NB_MAX_FILES + 1];
+static int     file_mode[NB_MAX_FILES + 1];
+static int64_t file_col[NB_MAX_FILES + 1];
+static int64_t cur_channel = 0;
+
+/* チャネル番号を検査して配列添字として返す共通ヘルパ */
+static int chan_check(int64_t n, int need_mode, const char *what)
+{
+    if (n < 0 || n > NB_MAX_FILES)
+        nb_fatal("Bad file number");
+    if (n != 0 && file_mode[n] == 0)
+        nb_fatal("File not open");
+    if (n != 0 && need_mode != 0 && file_mode[n] != need_mode)
+        nb_fatal(what);
+    return (int)n;
+}
+
+static FILE *cur_out(void)
+{
+    return cur_channel == 0 ? stdout : file_fp[cur_channel];
+}
+
+void nb_set_channel(int64_t n)
+{
+    chan_check(n, 2, "File not opened for output");
+    cur_channel = n;
+}
 
 static void out_write(const char *p, size_t n)
 {
     size_t i;
-    fwrite(p, 1, n, stdout);
+    fwrite(p, 1, n, cur_out());
     for (i = 0; i < n; i++) {
         if (p[i] == '\n')
-            out_col = 0;
+            file_col[cur_channel] = 0;
         else
-            out_col++;
+            file_col[cur_channel]++;
     }
 }
 
@@ -221,8 +276,8 @@ void nb_print_tab(void)
 {
     /* 次の 14 桁ゾーンの先頭へ。既にゾーン境界でも最低 1 桁進む
      * (2 つの項目がくっつかないようにする古典動作)。 */
-    int64_t target = (out_col / 14 + 1) * 14;
-    while (out_col < target)
+    int64_t target = (file_col[cur_channel] / 14 + 1) * 14;
+    while (file_col[cur_channel] < target)
         out_write(" ", 1);
 }
 
@@ -243,12 +298,11 @@ static char *in_ptr = NULL;
 void nb_input_begin(void)
 {
     fputs("? ", stdout);
-    out_col += 2;
     fflush(stdout);
     if (fgets(in_line, sizeof in_line, stdin) == NULL)
         nb_fatal("Out of input (EOF)");
     /* 入力エコーは端末が行うが、桁位置の追跡上は行が変わったとみなす */
-    out_col = 0;
+    file_col[0] = 0;
     in_ptr = in_line;
 }
 
@@ -298,6 +352,194 @@ nb_str *nb_input_str(void)
     size_t n;
     const char *p = input_token(&n);
     return str_from_cstr(p, n);
+}
+
+nb_str *nb_line_input(void)
+{
+    /* LINE INPUT: 1 行を丸ごと読む (カンマで分割しない、"?" も出さない)。
+     * 行末の改行 (と CR) は取り除く。 */
+    char buf[65536];
+    size_t n;
+    fflush(stdout);
+    if (fgets(buf, sizeof buf, stdin) == NULL)
+        nb_fatal("Out of input (EOF)");
+    file_col[0] = 0;
+    n = strlen(buf);
+    while (n > 0 && (buf[n - 1] == '\n' || buf[n - 1] == '\r'))
+        n--;
+    return str_from_cstr(buf, n);
+}
+
+/* ================================================================== */
+/* ファイル (OPEN / CLOSE / INPUT # / LINE INPUT # / EOF)              */
+/* ================================================================== */
+
+void nb_open(nb_str *path, int64_t mode, int64_t n)
+{
+    /* パスを NUL 終端のバッファへコピーする (nb_str の data は長さ付き
+     * バイト列であり、リテラル以外も NUL 終端は保証されるが防御的に)。 */
+    char buf[1024];
+    size_t len = (size_t)(path->len < 1023 ? path->len : 1023);
+    const char *fmode;
+    FILE *f;
+
+    memcpy(buf, path->data, len);
+    buf[len] = '\0';
+
+    if (n < 1 || n > NB_MAX_FILES)
+        nb_fatal("Bad file number");
+    if (file_mode[n] != 0)
+        nb_fatal("File already open");
+
+    /* テキストモードで開く (Windows では CRLF 変換される —
+     * コンソール出力と同じ扱い)。 */
+    fmode = mode == 0 ? "r" : mode == 1 ? "w" : "a";
+    f = fopen(buf, fmode);
+    if (f == NULL)
+        nb_fatal(mode == 0 ? "File not found" : "Cannot open file");
+    file_fp[n] = f;
+    file_mode[n] = mode == 0 ? 1 : 2;
+    file_col[n] = 0;
+}
+
+void nb_close(int64_t n)
+{
+    /* 開いていないファイルの CLOSE は古典に倣い何もしない */
+    if (n < 1 || n > NB_MAX_FILES || file_mode[n] == 0)
+        return;
+    fclose(file_fp[n]);
+    file_fp[n] = NULL;
+    file_mode[n] = 0;
+    if (cur_channel == n)
+        cur_channel = 0;
+}
+
+void nb_close_all(void)
+{
+    int64_t i;
+    for (i = 1; i <= NB_MAX_FILES; i++)
+        nb_close(i);
+}
+
+int64_t nb_eof(int64_t n)
+{
+    /* 1 文字先読みして終端かどうかを調べる (読んだ文字は戻す)。
+     * n = 0 は標準入力 — パイプで流し込まれた入力を最後まで処理する
+     * 「WHILE NOT EOF(0)」パターンのために用意している。 */
+    FILE *f;
+    int c;
+    if (n == 0)
+        f = stdin;
+    else {
+        chan_check(n, 1, "File not opened for input");
+        f = file_fp[n];
+    }
+    c = getc(f);
+    if (c == EOF)
+        return -1;
+    ungetc(c, f);
+    return 0;
+}
+
+/* INPUT # の項目読み取り (QBasic の INPUT # と同じ規則):
+ *   - 項目の前の空白・改行は読み飛ばす
+ *   - 引用符付き文字列は閉じの " まで ("" は " 1 文字)
+ *   - 生テキストの項目はカンマ/行末まで。ただし numeric = 1 のとき
+ *     (数値変数へ読むとき) は空白でも区切る — `10 20 30` のような
+ *     空白区切りの数値列が読めるのは古典からの伝統
+ *   - 項目の後の空白と、区切りのカンマ 1 個 (または行末) を消費する
+ */
+static size_t finput_token(FILE *f, char *buf, size_t cap, int numeric)
+{
+    size_t n = 0;
+    int c;
+
+    /* 項目の前の空白・改行・空要素を読み飛ばす */
+    do {
+        c = getc(f);
+    } while (c == ' ' || c == '\t' || c == '\n' || c == '\r');
+    if (c == EOF)
+        nb_fatal("Input past end of file");
+
+    if (c == '"') {
+        /* 引用符付き: 閉じの " まで (中の "" は " 1 文字) */
+        for (;;) {
+            c = getc(f);
+            if (c == EOF)
+                nb_fatal("Input past end of file");
+            if (c == '"') {
+                int c2 = getc(f);
+                if (c2 == '"') {
+                    if (n < cap - 1) buf[n++] = '"';
+                    continue;
+                }
+                c = c2;   /* 閉じ引用符の次の文字から区切り処理へ */
+                break;
+            }
+            if (n < cap - 1)
+                buf[n++] = (char)c;
+        }
+    } else {
+        /* 生テキスト: カンマか行末 (数値なら空白でも) まで */
+        while (c != EOF && c != ',' && c != '\n' && c != '\r'
+               && !(numeric && (c == ' ' || c == '\t'))) {
+            if (n < cap - 1)
+                buf[n++] = (char)c;
+            c = getc(f);
+        }
+        while (n > 0 && (buf[n - 1] == ' ' || buf[n - 1] == '\t'))
+            n--;
+    }
+
+    /* 区切りの後始末: 空白を飛ばし、カンマ 1 個または行末を消費する。
+     * それ以外の文字 (次の項目の先頭) は戻す。 */
+    while (c == ' ' || c == '\t')
+        c = getc(f);
+    if (c == '\r') {                  /* CRLF は 2 文字で 1 つの行末 */
+        c = getc(f);
+        if (c != '\n' && c != EOF)
+            ungetc(c, f);
+    } else if (c != EOF && c != ',' && c != '\n') {
+        ungetc(c, f);
+    }
+
+    buf[n] = '\0';
+    return n;
+}
+
+int64_t nb_finput_i64(int64_t n)
+{
+    return llrint(nb_finput_f64(n));
+}
+
+double nb_finput_f64(int64_t n)
+{
+    char buf[256];
+    chan_check(n, 1, "File not opened for input");
+    finput_token(file_fp[n], buf, sizeof buf, 1);
+    return strtod(buf, NULL);
+}
+
+nb_str *nb_finput_str(int64_t n)
+{
+    char buf[65536];
+    size_t len;
+    chan_check(n, 1, "File not opened for input");
+    len = finput_token(file_fp[n], buf, sizeof buf, 0);
+    return str_from_cstr(buf, len);
+}
+
+nb_str *nb_fline_input(int64_t n)
+{
+    char buf[65536];
+    size_t len;
+    chan_check(n, 1, "File not opened for input");
+    if (fgets(buf, sizeof buf, file_fp[n]) == NULL)
+        nb_fatal("Input past end of file");
+    len = strlen(buf);
+    while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r'))
+        len--;
+    return str_from_cstr(buf, len);
 }
 
 /* ================================================================== */
@@ -622,6 +864,160 @@ nb_str *nb_space(int64_t n)
 }
 
 /* ================================================================== */
+/* 端末制御 (TUI)                                                      */
+/* ================================================================== */
+
+/* 画面制御はすべて ANSI エスケープシーケンス。Windows 10 以降の
+ * コンソールは既定で無効なので、起動時に VT モードを有効化する。 */
+static void console_init(void)
+{
+#ifdef _WIN32
+    HANDLE h = GetStdHandle(STD_OUTPUT_HANDLE);
+    DWORD dw;
+    if (h != INVALID_HANDLE_VALUE && GetConsoleMode(h, &dw))
+        SetConsoleMode(h, dw | 0x0004 /* ENABLE_VIRTUAL_TERMINAL_PROCESSING */);
+#endif
+}
+
+void nb_cls(void)
+{
+    /* 2J = 画面消去, H = カーソルを (1,1) へ */
+    fputs("\x1b[2J\x1b[H", stdout);
+    fflush(stdout);
+    file_col[0] = 0;
+}
+
+void nb_locate(int64_t row, int64_t col)
+{
+    if (row < 1 || col < 1)
+        nb_fatal("Illegal function call");
+    printf("\x1b[%d;%dH", (int)row, (int)col);
+    fflush(stdout);
+    file_col[0] = col - 1;   /* PRINT の桁ゾーン追跡も移動先に合わせる */
+}
+
+void nb_color(int64_t fg, int64_t bg)
+{
+    /* QBasic の 16 色パレット (0-7 = 通常、8-15 = 高輝度) を ANSI の
+     * SGR コードへ変換する。色番号の並びが QBasic (青=1, 赤=4) と
+     * ANSI (赤=1, 青=4) で逆順の成分があるため写像表を使う。 */
+    static const int map[8] = { 0, 4, 2, 6, 1, 5, 3, 7 };
+    if (fg >= 0) {
+        int f = (int)(fg & 15);
+        printf("\x1b[%dm", (f & 8) ? 90 + map[f & 7] : 30 + map[f & 7]);
+    }
+    if (bg >= 0) {
+        int b = (int)(bg & 15);
+        printf("\x1b[%dm", (b & 8) ? 100 + map[b & 7] : 40 + map[b & 7]);
+    }
+    fflush(stdout);
+}
+
+void nb_sleep(double seconds)
+{
+    if (seconds <= 0.0)
+        return;
+    fflush(stdout);
+#ifdef _WIN32
+    Sleep((DWORD)(seconds * 1000.0));
+#else
+    {
+        struct timespec ts;
+        ts.tv_sec = (time_t)seconds;
+        ts.tv_nsec = (long)((seconds - (double)ts.tv_sec) * 1e9);
+        nanosleep(&ts, NULL);
+    }
+#endif
+}
+
+/* ---- キー入力 (INKEY$ / SLEEP のキー待ち) --------------------------- */
+/*
+ * wait = 1 : キーが押されるまでブロックして、そのキーを返す
+ * wait = 0 : 押されていれば返し、押されていなければ -1 を返す
+ *
+ * 標準入力が端末でない場合 (パイプ/リダイレクト) は「次のバイトを
+ * 読む」動作に落とす。これによりテストや `prog < input.txt` のような
+ * バッチ利用でも INKEY$ が意味を持つ (EOF では -1)。
+ */
+static int read_key(int wait)
+{
+    if (!nb_isatty(nb_fileno(stdin)))
+        return getc(stdin);   /* EOF は -1 としてそのまま返る */
+    fflush(stdout);
+#ifdef _WIN32
+    if (wait)
+        return _getch();
+    return _kbhit() ? _getch() : -1;
+#else
+    {
+        /* 一時的に非カノニカル・エコーなしにして 1 バイト読む。
+         * VMIN/VTIME: wait なら「1 文字来るまで待つ」、
+         * さもなくば「待たずに 0 文字でも返ってよい」。 */
+        struct termios saved, raw;
+        unsigned char ch;
+        ssize_t got;
+        if (tcgetattr(0, &saved) != 0)
+            return getc(stdin);
+        raw = saved;
+        raw.c_lflag &= ~(ICANON | ECHO);
+        raw.c_cc[VMIN] = wait ? 1 : 0;
+        raw.c_cc[VTIME] = 0;
+        tcsetattr(0, TCSANOW, &raw);
+        got = read(0, &ch, 1);
+        tcsetattr(0, TCSANOW, &saved);
+        return got == 1 ? (int)ch : -1;
+    }
+#endif
+}
+
+void nb_waitkey(void)
+{
+    read_key(1);
+}
+
+nb_str *nb_inkey(void)
+{
+    int c = read_key(0);
+    if (c < 0)
+        return &nb_empty_str;
+    return nb_chr(c & 0xFF);
+}
+
+/* ---- コマンドライン引数 (COMMAND$) ---------------------------------- */
+
+static int    g_argc = 0;
+static char **g_argv = NULL;
+
+nb_str *nb_command(int64_t i)
+{
+    if (i < 0)
+        nb_fatal("Illegal function call");
+    if (i == 0) {
+        /* 引数なしの COMMAND$: 全引数を空白 1 個で連結した文字列 */
+        size_t total = 0;
+        int k;
+        char *buf;
+        nb_str *s;
+        if (g_argc <= 1)
+            return &nb_empty_str;
+        for (k = 1; k < g_argc; k++)
+            total += strlen(g_argv[k]) + 1;   /* 区切り or 終端の分 */
+        s = str_alloc((int64_t)(total - 1), &buf);
+        for (k = 1; k < g_argc; k++) {
+            size_t len = strlen(g_argv[k]);
+            memcpy(buf, g_argv[k], len);
+            buf += len;
+            if (k != g_argc - 1)
+                *buf++ = ' ';
+        }
+        return s;
+    }
+    if (i < g_argc)
+        return str_from_cstr(g_argv[i], strlen(g_argv[i]));
+    return &nb_empty_str;   /* 範囲外は空文字列 (エラーにしない) */
+}
+
+/* ================================================================== */
 /* 配列                                                                */
 /* ================================================================== */
 
@@ -751,13 +1147,18 @@ void nb_arr_set2_str(int64_t h, int64_t i, int64_t j, nb_str *v)
 /* エントリポイント                                                    */
 /* ================================================================== */
 
-int main(void)
+int main(int argc, char **argv)
 {
-    /* 生成コードのメイン関数を呼ぶだけ。END 文は nb_end() 経由で
-     * ここへ戻らず exit するが、メイン末尾まで実行が到達した場合は
-     * ここで後始末する。 */
+    /* COMMAND$ 用に引数を保存し、コンソールを初期化してから
+     * 生成コードのメイン関数を呼ぶ。END 文は nb_end() 経由でここへ
+     * 戻らず exit するが、メイン末尾まで実行が到達した場合はここで
+     * 後始末する。 */
+    g_argc = argc;
+    g_argv = argv;
+    console_init();
     nb_basic_main();
     fflush(stdout);
+    nb_close_all();
     arena_free_all();
     free(gosub_stack);
     free(arr_table);

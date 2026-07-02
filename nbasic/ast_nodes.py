@@ -177,18 +177,35 @@ class PrintStmt(Stmt):
     """PRINT 文。items が空なら空行を出力。
     trailing_sep が True なら最後の項目に ; か , が付いており、
     改行を出力しない (古典 BASIC のセミコロン継続)。
+    channel は `PRINT #n, ...` のファイル番号式 (None なら画面へ)。
     """
     items: list[PrintItem] = field(default_factory=list)
     trailing_sep: bool = False
+    channel: Expr | None = None
 
 
 @dataclass
 class InputStmt(Stmt):
     """INPUT ["プロンプト" (";"|",")] 変数 [, 変数 ...]
     prompt が None のときは既定のプロンプト "? " を表示する。
+    channel は `INPUT #n, ...` のファイル番号式 (None ならキーボード)。
+    ファイル形式ではプロンプトは書けない。
     """
     prompt: str | None = None
     targets: list[Expr] = field(default_factory=list)
+    channel: Expr | None = None
+
+
+@dataclass
+class LineInputStmt(Stmt):
+    """LINE INPUT [#n,] ["プロンプト" (";"|",")] 文字列変数
+
+    1 行をそのまま (カンマで分割せずに) 読み込む。target は STRING の
+    lvalue でなければならない (意味解析で検査)。
+    """
+    channel: Expr | None = None
+    prompt: str | None = None
+    target: Expr | None = None
 
 
 @dataclass
@@ -270,7 +287,52 @@ class ReturnStmt(Stmt):
 
 @dataclass
 class EndStmt(Stmt):
-    """END / STOP。プログラムを終了する。"""
+    """END [終了コード] / STOP。プログラムを終了する。
+    code が None なら終了コード 0。"""
+    code: Expr | None = None
+
+
+@dataclass
+class OpenStmt(Stmt):
+    """OPEN パス$ FOR INPUT|OUTPUT|APPEND AS [#]番号
+
+    mode は "INPUT" (読み取り) / "OUTPUT" (新規書き込み) /
+    "APPEND" (追記)。番号は 1〜15 のファイル番号 (実行時検査)。
+    """
+    path: Expr | None = None
+    mode: str = ""
+    filenum: Expr | None = None
+
+
+@dataclass
+class CloseStmt(Stmt):
+    """CLOSE [[#]番号 [, [#]番号 ...]]。引数なしは全ファイルを閉じる。"""
+    filenums: list[Expr] = field(default_factory=list)
+
+
+@dataclass
+class ClsStmt(Stmt):
+    """CLS — 画面消去してカーソルを左上へ。"""
+
+
+@dataclass
+class LocateStmt(Stmt):
+    """LOCATE 行 [, 桁] — カーソル移動 (1 起点)。桁省略時は 1。"""
+    row: Expr | None = None
+    col: Expr | None = None
+
+
+@dataclass
+class ColorStmt(Stmt):
+    """COLOR 前景 [, 背景] — 文字色の変更 (QBasic の 0〜15 パレット)。"""
+    fg: Expr | None = None
+    bg: Expr | None = None
+
+
+@dataclass
+class SleepStmt(Stmt):
+    """SLEEP [秒] — 指定秒 (小数可) の待機。省略時はキー入力待ち。"""
+    seconds: Expr | None = None
 
 
 @dataclass

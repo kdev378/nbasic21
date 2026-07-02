@@ -48,7 +48,11 @@ KEYWORDS = frozenset("""
     REM STOP EXIT SWAP RANDOMIZE
     AND OR XOR NOT MOD
     INTEGER DOUBLE STRING
+    OPEN CLOSE LINE
+    CLS LOCATE COLOR SLEEP
 """.split())
+# 注: OPEN の OUTPUT / APPEND モード名は予約語ではなく、OPEN 文の
+# 文脈でのみ識別子として照合する (変数名 OUTPUT を壊さないため)。
 
 # 2 文字演算子。1 文字演算子より先に照合しなければならない
 # (例: "<=" を "<" と "=" に分けてしまわないように)。
@@ -56,7 +60,9 @@ TWO_CHAR_OPS = ("<=", ">=", "<>")
 
 # 1 文字演算子・区切り記号。
 # \  : 整数除算   ^ : べき乗   & : 文字列連結   ; , : PRINT の区切り
-ONE_CHAR_OPS = "+-*/\\^=<>(),;&"
+# #  : ファイル番号の目印 (PRINT #1 など)。識別子・数値の直後の # は
+#      型サフィックスとしてそちらの字句解析が先に消費するので衝突しない。
+ONE_CHAR_OPS = "+-*/\\^=<>(),;&#"
 
 
 @dataclass(frozen=True)
