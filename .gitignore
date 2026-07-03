@@ -10,3 +10,4 @@ examples/*.exe
 examples/fizzbuzz
 examples/hello
 examples/sieve
+editors/vscode/*.vsix

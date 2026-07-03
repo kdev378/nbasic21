@@ -8,6 +8,11 @@
 - **現代的機能**: ブロック `IF`/`ELSEIF`、`SELECT CASE`、`DO`/`LOOP`、
   `SUB`/`FUNCTION` (再帰・前方参照可)、ローカル変数、`CONST`、
   `EXIT` 文、名前ラベル、`AS INTEGER/DOUBLE/STRING` 型宣言
+- **CLI 向け**: ファイル入出力 (`OPEN`/`PRINT #`/`INPUT #`/
+  `LINE INPUT #`/`EOF`)、コマンドライン引数 (`COMMAND$`)、
+  終了コード (`END 式`)、標準入力の EOF 検査 (`EOF(0)`)
+- **TUI 向け**: `CLS`/`LOCATE`/`COLOR` (ANSI、Windows 10+ の VT モード
+  自動有効化)、ノンブロッキングキー入力 `INKEY$`、`SLEEP`
 - **2 つのバックエンド** (共通の三番地コード IR から生成):
   - **C** — 可搬。手元の cc でビルドしてどこでも実行
   - **x86-64** — Windows x64 (Microsoft 呼び出し規約) 向け NASM
@@ -50,8 +55,17 @@ Windows 上でセルフビルドする場合は最後のリンクを
 
 ```sh
 python3 -m nbasic --emit-ir -O program.bas   # 最適化後の IR を表示
+python3 -m nbasic --check program.bas        # エラー検査のみ (エディタ連携用)
 python3 -m nbasic -o out.c program.bas       # 出力ファイル名の指定
 ```
+
+### VS Code 拡張
+
+[editors/vscode/](editors/vscode/) にシンタックスハイライト・
+スニペット・**F5 でコンパイル & 実行**・保存時のエラー診断 (波線表示)・
+IR 表示コマンドを備えた拡張がある。インストール方法は
+[editors/vscode/README.md](editors/vscode/README.md) を参照
+(フォルダをコピーするだけでも入る)。
 
 ## 例
 
@@ -87,7 +101,8 @@ END FUNCTION
 ```
 
 その他のサンプルは [examples/](examples/) を参照
-(エラトステネスのふるい、文字列ソート、数当てゲームなど)。
+(エラトステネスのふるい、文字列ソート、数当てゲーム、
+`wc` 風の CLI ツールなど)。
 
 ## ドキュメント
 
@@ -115,6 +130,7 @@ runtime/           C ランタイムライブラリ (両バックエンド共通
 examples/          サンプルプログラム
 docs/              言語仕様・内部設計
 tests/             統合テスト (ゴールデン + x64 クロス検証 + エラー)
+editors/vscode/    VS Code 拡張 (ハイライト・診断・F5 実行・IR 表示)
 ```
 
 ## テスト

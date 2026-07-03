@@ -1,0 +1,132 @@
+{
+  "name": "nbasic21",
+  "displayName": "NBASIC-21",
+  "description": "NBASIC-21 言語サポート — シンタックスハイライト・スニペット・コンパイル&実行・保存時のエラー診断",
+  "version": "0.1.0",
+  "publisher": "nbasic21",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/kdev378/nbasic21"
+  },
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages",
+    "Snippets"
+  ],
+  "keywords": [
+    "basic",
+    "nbasic",
+    "compiler",
+    "retro"
+  ],
+  "main": "./src/extension.js",
+  "activationEvents": [
+    "onLanguage:nbasic"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "nbasic",
+        "aliases": [
+          "NBASIC-21",
+          "nbasic"
+        ],
+        "extensions": [
+          ".bas"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "nbasic",
+        "scopeName": "source.nbasic",
+        "path": "./syntaxes/nbasic.tmLanguage.json"
+      }
+    ],
+    "snippets": [
+      {
+        "language": "nbasic",
+        "path": "./snippets/nbasic.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "nbasic.runFile",
+        "title": "NBASIC: コンパイルして実行",
+        "icon": "$(play)"
+      },
+      {
+        "command": "nbasic.buildFile",
+        "title": "NBASIC: コンパイルのみ (実行ファイル生成)"
+      },
+      {
+        "command": "nbasic.showIR",
+        "title": "NBASIC: IR (中間表現) を表示"
+      }
+    ],
+    "menus": {
+      "editor/title/run": [
+        {
+          "command": "nbasic.runFile",
+          "when": "editorLangId == nbasic",
+          "group": "navigation"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "nbasic.runFile",
+          "when": "editorLangId == nbasic"
+        },
+        {
+          "command": "nbasic.buildFile",
+          "when": "editorLangId == nbasic"
+        },
+        {
+          "command": "nbasic.showIR",
+          "when": "editorLangId == nbasic"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "nbasic.runFile",
+        "key": "f5",
+        "when": "editorLangId == nbasic && editorTextFocus && !inDebugMode"
+      }
+    ],
+    "configuration": {
+      "title": "NBASIC-21",
+      "properties": {
+        "nbasic.pythonPath": {
+          "type": "string",
+          "default": "python3",
+          "description": "コンパイラの実行に使う Python (Windows では py や python)"
+        },
+        "nbasic.compilerRoot": {
+          "type": "string",
+          "default": "",
+          "description": "nbasic21 リポジトリのルート (nbasic/ パッケージと runtime/ がある場所)。空ならワークスペースから自動検出する"
+        },
+        "nbasic.ccPath": {
+          "type": "string",
+          "default": "cc",
+          "description": "C コンパイラ (gcc / clang / cc)。Windows では gcc (MinGW) など"
+        },
+        "nbasic.optimize": {
+          "type": "boolean",
+          "default": true,
+          "description": "コンパイル時に -O (IR 最適化) を付ける"
+        },
+        "nbasic.checkOnSave": {
+          "type": "boolean",
+          "default": true,
+          "description": "保存時にコンパイラの --check を走らせてエラーを波線表示する"
+        }
+      }
+    }
+  }
+}

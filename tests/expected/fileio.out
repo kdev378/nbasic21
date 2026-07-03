@@ -1,0 +1,5 @@
+read: alpha/ 42  3.5 
+line: beta line
+q: quoted:"hi/there"
+rest: 1 last: gamma appended
+stdin: 2 lines, 11 bytes

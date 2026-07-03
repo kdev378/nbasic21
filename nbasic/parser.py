@@ -245,8 +245,19 @@ class Parser:
 
     # ---- PRINT -----------------------------------------------------------
 
+    def _parse_channel(self) -> A.Expr | None:
+        """`# ファイル番号式 ,` の省略可能な前置部を読む
+        (PRINT # / INPUT # / LINE INPUT # で共通)。"""
+        if not self._at("OP", "#"):
+            return None
+        self._advance()  # '#'
+        ch = self._parse_expr()
+        self._expect_op(",")
+        return ch
+
     def _parse_print_stmt(self) -> list[A.Stmt]:
         pos = self._advance().pos  # PRINT
+        channel = self._parse_channel()
         items: list[A.PrintItem] = []
         trailing = False
         # 空の PRINT は空行の出力
@@ -262,15 +273,18 @@ class Parser:
             else:
                 items.append(A.PrintItem(expr, ""))
                 break
-        return [A.PrintStmt(pos, items=items, trailing_sep=trailing)]
+        return [A.PrintStmt(pos, items=items, trailing_sep=trailing,
+                            channel=channel)]
 
-    # ---- INPUT -----------------------------------------------------------
+    # ---- INPUT / LINE INPUT ------------------------------------------------
 
     def _parse_input_stmt(self) -> list[A.Stmt]:
         pos = self._advance().pos  # INPUT
+        channel = self._parse_channel()
         prompt: str | None = None
         # INPUT "プロンプト"; 変数   または   INPUT "プロンプト", 変数
-        if self._at("STRING"):
+        # (ファイル形式 INPUT #n にプロンプトは書けない)
+        if channel is None and self._at("STRING"):
             prompt = self._advance().value
             if not (self._accept_op(";") or self._accept_op(",")):
                 raise CompileError("プロンプト文字列の後に ';' か ',' が必要です",
@@ -278,7 +292,24 @@ class Parser:
         targets = [self._parse_lvalue()]
         while self._accept_op(","):
             targets.append(self._parse_lvalue())
-        return [A.InputStmt(pos, prompt=prompt, targets=targets)]
+        return [A.InputStmt(pos, prompt=prompt, targets=targets,
+                            channel=channel)]
+
+    def _parse_line_stmt(self) -> list[A.Stmt]:
+        """LINE INPUT [#n,] ["プロンプト" (";"|",")] 文字列変数
+        1 行を丸ごと読む (カンマで分割しない)。"""
+        pos = self._advance().pos  # LINE
+        self._expect_kw("INPUT")
+        channel = self._parse_channel()
+        prompt: str | None = None
+        if channel is None and self._at("STRING"):
+            prompt = self._advance().value
+            if not (self._accept_op(";") or self._accept_op(",")):
+                raise CompileError("プロンプト文字列の後に ';' か ',' が必要です",
+                                   self._cur().pos)
+        target = self._parse_lvalue()
+        return [A.LineInputStmt(pos, channel=channel, prompt=prompt,
+                                target=target)]
 
     def _parse_lvalue(self) -> A.Expr:
         """代入先 (変数または配列要素) を読む。"""
@@ -524,11 +555,80 @@ class Parser:
             raise CompileError(
                 f"対応するブロックのない 'END {nxt.value}' です", pos)
         self._advance()
-        return [A.EndStmt(pos)]
+        # END 式 — プロセスの終了コードを指定する現代的拡張 (仕様書 §6.8)
+        code: A.Expr | None = None
+        if not self._at_stmt_end() and not self._at_kw("ELSE"):
+            code = self._parse_expr()
+        return [A.EndStmt(pos, code=code)]
 
     def _parse_stop_stmt(self) -> list[A.Stmt]:
         pos = self._advance().pos
         return [A.EndStmt(pos)]
+
+    # ---- ファイル入出力 -------------------------------------------------------
+
+    def _parse_open_stmt(self) -> list[A.Stmt]:
+        """OPEN パス$ FOR INPUT|OUTPUT|APPEND AS [#]番号"""
+        pos = self._advance().pos  # OPEN
+        path = self._parse_expr()
+        self._expect_kw("FOR")
+        # モード名のうち INPUT はキーワード、OUTPUT/APPEND は予約語を
+        # 増やさないために識別子として文脈照合する (lexer.py 冒頭の注)。
+        if self._accept_kw("INPUT"):
+            mode = "INPUT"
+        elif self._at("IDENT") and self._cur().value in ("OUTPUT", "APPEND"):
+            mode = self._advance().value
+        else:
+            raise CompileError("OPEN のモードは INPUT / OUTPUT / APPEND です",
+                               self._cur().pos)
+        self._expect_kw("AS")
+        self._accept_op("#")           # '#' は省略可能
+        filenum = self._parse_expr()
+        return [A.OpenStmt(pos, path=path, mode=mode, filenum=filenum)]
+
+    def _parse_close_stmt(self) -> list[A.Stmt]:
+        """CLOSE [[#]番号 [, [#]番号 ...]] — 引数なしは全部閉じる。"""
+        pos = self._advance().pos  # CLOSE
+        filenums: list[A.Expr] = []
+        if not self._at_stmt_end() and not self._at_kw("ELSE"):
+            while True:
+                self._accept_op("#")
+                filenums.append(self._parse_expr())
+                if not self._accept_op(","):
+                    break
+        return [A.CloseStmt(pos, filenums=filenums)]
+
+    # ---- 画面制御 (TUI) --------------------------------------------------------
+
+    def _parse_cls_stmt(self) -> list[A.Stmt]:
+        pos = self._advance().pos
+        return [A.ClsStmt(pos)]
+
+    def _parse_locate_stmt(self) -> list[A.Stmt]:
+        """LOCATE 行 [, 桁]"""
+        pos = self._advance().pos
+        row = self._parse_expr()
+        col: A.Expr | None = None
+        if self._accept_op(","):
+            col = self._parse_expr()
+        return [A.LocateStmt(pos, row=row, col=col)]
+
+    def _parse_color_stmt(self) -> list[A.Stmt]:
+        """COLOR 前景 [, 背景]"""
+        pos = self._advance().pos
+        fg = self._parse_expr()
+        bg: A.Expr | None = None
+        if self._accept_op(","):
+            bg = self._parse_expr()
+        return [A.ColorStmt(pos, fg=fg, bg=bg)]
+
+    def _parse_sleep_stmt(self) -> list[A.Stmt]:
+        """SLEEP [秒] — 省略時はキー入力待ち。"""
+        pos = self._advance().pos
+        seconds: A.Expr | None = None
+        if not self._at_stmt_end() and not self._at_kw("ELSE"):
+            seconds = self._parse_expr()
+        return [A.SleepStmt(pos, seconds=seconds)]
 
     # ---- 宣言 --------------------------------------------------------------
 

@@ -307,7 +307,12 @@ class IRGen:
             self._emit("jmp", extra="__gosub_dispatch")
 
     def _g_EndStmt(self, st: A.EndStmt) -> None:
-        self._call("nb_end", (), None)   # ランタイム側で後始末して exit(0)
+        # ランタイム側で後始末して exit する (コード省略時は 0)
+        if st.code is None:
+            self._call("nb_end", (), None)
+        else:
+            v = self._coerce(self._expr(st.code), I)
+            self._call("nb_end_code", (v,), None)
 
     # ---- 代入・宣言 ----------------------------------------------------------
 
@@ -359,6 +364,13 @@ class IRGen:
     # ---- 入出力 ---------------------------------------------------------------
 
     def _g_PrintStmt(self, st: A.PrintStmt) -> None:
+        # PRINT #n はランタイムの「現在の出力チャネル」を切り替えてから
+        # 通常の print 関数群を使い、終わったら画面 (チャネル 0) へ戻す。
+        # チャネルはコンパイル時ではなく実行時の状態なので、既存の
+        # nb_print_* をファイル対応に一般化するだけで済む (nbrt.c 参照)。
+        if st.channel is not None:
+            ch = self._coerce(self._expr(st.channel), I)
+            self._call("nb_set_channel", (ch,), None)
         for item in st.items:
             v = self._expr(item.expr)
             self._call(f"nb_print_{_TYSFX[value_type(v)]}", (v,), None)
@@ -366,8 +378,17 @@ class IRGen:
                 self._call("nb_print_tab", (), None)   # 次の 14 桁ゾーンへ
         if not st.trailing_sep:
             self._call("nb_print_nl", (), None)
+        if st.channel is not None:
+            self._call("nb_set_channel", (IntConst(0),), None)
 
     def _g_InputStmt(self, st: A.InputStmt) -> None:
+        if st.channel is not None:
+            # ファイルからの INPUT #: 項目単位で読む (行の途中でもよい)
+            ch = self._coerce(self._expr(st.channel), I)
+            for tgt in st.targets:
+                v = self._call(f"nb_finput_{_TYSFX[tgt.ty]}", (ch,), tgt.ty)
+                self._store(tgt, v)
+            return
         if st.prompt is not None:
             self._call("nb_print_str",
                        (self.ir.intern_string(st.prompt),), None)
@@ -377,6 +398,54 @@ class IRGen:
         for tgt in st.targets:
             v = self._call(f"nb_input_{_TYSFX[tgt.ty]}", (), tgt.ty)
             self._store(tgt, v)
+
+    def _g_LineInputStmt(self, st: A.LineInputStmt) -> None:
+        if st.channel is not None:
+            ch = self._coerce(self._expr(st.channel), I)
+            v = self._call("nb_fline_input", (ch,), S)
+        else:
+            if st.prompt is not None:
+                self._call("nb_print_str",
+                           (self.ir.intern_string(st.prompt),), None)
+            v = self._call("nb_line_input", (), S)
+        self._store(st.target, v)
+
+    def _g_OpenStmt(self, st: A.OpenStmt) -> None:
+        # モードコードはランタイムとの規約: 0=INPUT, 1=OUTPUT, 2=APPEND
+        mode = {"INPUT": 0, "OUTPUT": 1, "APPEND": 2}[st.mode]
+        path = self._expr(st.path)
+        num = self._coerce(self._expr(st.filenum), I)
+        self._call("nb_open", (path, IntConst(mode), num), None)
+
+    def _g_CloseStmt(self, st: A.CloseStmt) -> None:
+        if not st.filenums:
+            self._call("nb_close_all", (), None)
+            return
+        for e in st.filenums:
+            self._call("nb_close", (self._coerce(self._expr(e), I),), None)
+
+    def _g_ClsStmt(self, st: A.ClsStmt) -> None:
+        self._call("nb_cls", (), None)
+
+    def _g_LocateStmt(self, st: A.LocateStmt) -> None:
+        row = self._coerce(self._expr(st.row), I)
+        col = self._coerce(self._expr(st.col), I) if st.col is not None \
+            else IntConst(1)
+        self._call("nb_locate", (row, col), None)
+
+    def _g_ColorStmt(self, st: A.ColorStmt) -> None:
+        # 背景省略は -1 (変更しない) をランタイムへの規約とする
+        fg = self._coerce(self._expr(st.fg), I)
+        bg = self._coerce(self._expr(st.bg), I) if st.bg is not None \
+            else IntConst(-1)
+        self._call("nb_color", (fg, bg), None)
+
+    def _g_SleepStmt(self, st: A.SleepStmt) -> None:
+        if st.seconds is None:
+            self._call("nb_waitkey", (), None)   # 古典の SLEEP = キー待ち
+        else:
+            v = self._coerce(self._expr(st.seconds), D)
+            self._call("nb_sleep", (v,), None)
 
     def _g_ReadStmt(self, st: A.ReadStmt) -> None:
         for tgt in st.targets:
@@ -746,6 +815,15 @@ class IRGen:
         # --- 引数なし ---
         if name == "TIMER":
             return self._call("nb_timer", (), D)
+        if name == "INKEY$":
+            return self._call("nb_inkey", (), S)
+        if name == "COMMAND$":
+            # 引数なし = 0 (全引数を空白区切りで連結) をランタイム規約に
+            if e.args:
+                n = self._coerce(self._expr(e.args[0]), I)
+            else:
+                n = IntConst(0)
+            return self._call("nb_command", (n,), S)
         if name == "RND":
             # RND(x) の引数は古典 BASIC との互換のために受け付けるが、
             # 副作用のため評価だけして値は無視する (仕様書 §10.4)。
@@ -797,6 +875,7 @@ class IRGen:
             "ATN": ("nb_atn", (D,), D), "LOG": ("nb_log", (D,), D),
             "EXP": ("nb_exp", (D,), D),
             "LEN": ("nb_len", (S,), I), "ASC": ("nb_asc", (S,), I),
+            "EOF": ("nb_eof", (I,), I),
             "VAL": ("nb_val", (S,), D), "CHR$": ("nb_chr", (I,), S),
             "LEFT$": ("nb_left", (S, I), S),
             "RIGHT$": ("nb_right", (S, I), S),

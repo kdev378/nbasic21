@@ -104,10 +104,14 @@ BUILTINS: dict[str, BuiltinSig] = {
     "UCASE$": BuiltinSig((S,), S, 1, 1),
     "LCASE$": BuiltinSig((S,), S, 1, 1),
     "SPACE$": BuiltinSig((I,), S, 1, 1),
+    # --- 端末・環境 (仕様書 §10.5) ---
+    "INKEY$":   BuiltinSig((), S, 0, 0),   # 押されていれば 1 キー、無ければ ""
+    "COMMAND$": BuiltinSig(None, S, 0, 1), # 引数なし=全体 / (n)=n 番目
+    "EOF":      BuiltinSig((I,), I, 1, 1), # ファイル終端なら真 (-1)
 }
 
 # 引数なしで裸の識別子として書ける組込関数 (仕様書 §10.4)
-ZERO_ARG_BUILTINS = frozenset({"RND", "TIMER"})
+ZERO_ARG_BUILTINS = frozenset({"RND", "TIMER", "INKEY$", "COMMAND$"})
 
 
 # --------------------------------------------------------------------------
@@ -455,6 +459,11 @@ class Analyzer:
                 if a.ty != Type.STRING:
                     raise CompileError("INSTR の対象は文字列です", node.pos)
             return Type.INTEGER
+        if node.name == "COMMAND$":
+            # COMMAND$ = 引数全体 / COMMAND$(n) = n 番目の引数
+            if n == 1:
+                self._require_num(node.args[0], node.pos, "COMMAND$ の引数")
+            return Type.STRING
         if node.name == "MID$":
             if node.args[0].ty != Type.STRING:
                 raise CompileError("MID$ の第 1 引数は文字列です", node.pos)
@@ -562,14 +571,70 @@ class Analyzer:
         pass  # ラベルはパス 2 で収集済み
 
     def _s_EndStmt(self, st: A.EndStmt) -> None:
-        pass
+        if st.code is not None:
+            st.code = self._expr(st.code)
+            self._require_num(st.code, st.pos, "END の終了コード")
+
+    def _channel(self, ch: A.Expr | None, pos: SourcePos) -> A.Expr | None:
+        """PRINT #n / INPUT #n などのファイル番号式を検査する。"""
+        if ch is None:
+            return None
+        ch = self._expr(ch)
+        self._require_num(ch, pos, "ファイル番号")
+        return ch
 
     def _s_PrintStmt(self, st: A.PrintStmt) -> None:
+        st.channel = self._channel(st.channel, st.pos)
         for item in st.items:
             item.expr = self._expr(item.expr)   # 任意の型を出力できる
 
     def _s_InputStmt(self, st: A.InputStmt) -> None:
+        st.channel = self._channel(st.channel, st.pos)
         st.targets = [self._lvalue(t) for t in st.targets]
+
+    def _s_LineInputStmt(self, st: A.LineInputStmt) -> None:
+        st.channel = self._channel(st.channel, st.pos)
+        st.target = self._lvalue(st.target)
+        if st.target.ty != Type.STRING:
+            raise CompileError(
+                "LINE INPUT の代入先は文字列変数でなければなりません", st.pos)
+
+    def _s_OpenStmt(self, st: A.OpenStmt) -> None:
+        st.path = self._expr(st.path)
+        if st.path.ty != Type.STRING:
+            raise CompileError("OPEN のパスは文字列です", st.pos)
+        st.filenum = self._expr(st.filenum)
+        self._require_num(st.filenum, st.pos, "ファイル番号")
+
+    def _s_CloseStmt(self, st: A.CloseStmt) -> None:
+        new_nums: list[A.Expr] = []
+        for e in st.filenums:
+            e = self._expr(e)
+            self._require_num(e, st.pos, "ファイル番号")
+            new_nums.append(e)
+        st.filenums = new_nums
+
+    def _s_ClsStmt(self, st: A.ClsStmt) -> None:
+        pass
+
+    def _s_LocateStmt(self, st: A.LocateStmt) -> None:
+        st.row = self._expr(st.row)
+        self._require_num(st.row, st.pos, "LOCATE の行")
+        if st.col is not None:
+            st.col = self._expr(st.col)
+            self._require_num(st.col, st.pos, "LOCATE の桁")
+
+    def _s_ColorStmt(self, st: A.ColorStmt) -> None:
+        st.fg = self._expr(st.fg)
+        self._require_num(st.fg, st.pos, "COLOR の前景色")
+        if st.bg is not None:
+            st.bg = self._expr(st.bg)
+            self._require_num(st.bg, st.pos, "COLOR の背景色")
+
+    def _s_SleepStmt(self, st: A.SleepStmt) -> None:
+        if st.seconds is not None:
+            st.seconds = self._expr(st.seconds)
+            self._require_num(st.seconds, st.pos, "SLEEP の秒数")
 
     def _s_ReadStmt(self, st: A.ReadStmt) -> None:
         st.targets = [self._lvalue(t) for t in st.targets]

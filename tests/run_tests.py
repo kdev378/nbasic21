@@ -114,7 +114,9 @@ def golden_tests(tools: dict, do_x64: bool) -> None:
                 if p.returncode != 0:
                     report(tag, False, p.stderr)
                     continue
-                p = run([str(exe)], input=stdin_text)
+                # 実行は一時ディレクトリを作業ディレクトリにする
+                # (OPEN で相対パスのファイルを作るテストのため)
+                p = run([str(exe)], input=stdin_text, cwd=td)
                 ok = p.stdout == expected and p.returncode == 0
                 report(tag, ok,
                        f"--- expected ---\n{expected}--- actual ---\n"
@@ -144,7 +146,7 @@ def golden_tests(tools: dict, do_x64: bool) -> None:
                     continue
                 wine_env = dict(os.environ, WINEDEBUG="-all")
                 p = run([tools["wine"], str(exe)], input=stdin_text,
-                        env=wine_env)
+                        env=wine_env, cwd=td)
                 # Windows のテキスト出力は CRLF なので正規化して比較
                 actual = p.stdout.replace("\r\n", "\n")
                 ok = actual == expected and p.returncode == 0
@@ -196,6 +198,19 @@ RUNTIME_ERROR_CASES = [
     ("GOSUB なしの RETURN", 'RETURN\n', "", "RETURN without GOSUB"),
     ("DATA の枯渇", 'READ X\nDATA\n', "", "Out of DATA"),
     ("負数の SQR", 'PRINT SQR(0 - 1)\n', "", "Illegal function call"),
+    ("開いていないファイルへの PRINT #",
+     'PRINT #1, "x"\n', "", "File not open"),
+    ("不正なファイル番号", 'OPEN "x.tmp" FOR OUTPUT AS #99\n', "",
+     "Bad file number"),
+    ("存在しないファイルの OPEN INPUT",
+     'OPEN "no_such_file.tmp" FOR INPUT AS #1\n', "", "File not found"),
+    ("二重 OPEN",
+     'OPEN "a.tmp" FOR OUTPUT AS #1\nOPEN "b.tmp" FOR OUTPUT AS #1\n', "",
+     "File already open"),
+    ("ファイル終端を越える READ",
+     'OPEN "e.tmp" FOR OUTPUT AS #1\nCLOSE\n'
+     'OPEN "e.tmp" FOR INPUT AS #1\nINPUT #1, X\n', "",
+     "Input past end of file"),
 ]
 
 
@@ -227,7 +242,8 @@ def error_tests(tools: dict) -> None:
             if p.returncode != 0:
                 report(name, False, p.stderr)
                 continue
-            p = run([str(exe)], input=stdin_text)
+            # ファイルを作るテストがあるので作業ディレクトリは一時領域
+            p = run([str(exe)], input=stdin_text, cwd=td)
             ok = p.returncode == 1 and needle in p.stderr
             report(name, ok,
                    f"exit={p.returncode} stderr={p.stderr!r}"
@@ -235,6 +251,60 @@ def error_tests(tools: dict) -> None:
 
 
 # ----------------------------------------------------------------------
+# コマンドライン引数と終了コード (ゴールデンテストの枠に収まらないもの)
+# ----------------------------------------------------------------------
+
+def cli_tests(tools: dict, do_x64: bool) -> None:
+    """COMMAND$ と END 終了コードのテスト。実行時に引数を渡し、
+    プロセスの終了コードを検査する必要があるため専用に行う。"""
+    print("== CLI テスト (COMMAND$ / END 終了コード) ==")
+    source = ('PRINT COMMAND$; "|"; COMMAND$(2); "|"; COMMAND$(9)\n'
+              'END 7\n')
+    want_out = "foo bar|bar|\n"
+    args = ["foo", "bar"]
+
+    with tempfile.TemporaryDirectory() as td:
+        tmp = Path(td)
+        src = tmp / "t.bas"
+        src.write_text(source, encoding="utf-8")
+
+        # --- C バックエンド ---
+        c_file = tmp / "t.c"
+        exe = tmp / "t"
+        p = compile_bas(src, "c", c_file, False)
+        if p.returncode == 0:
+            p = run([tools["cc"], "-I", str(RUNTIME), str(c_file),
+                     str(RUNTIME / "nbrt.c"), "-lm", "-o", str(exe)])
+        if p.returncode != 0:
+            report("COMMAND$/END code [c]", False, p.stderr)
+        else:
+            p = run([str(exe), *args], cwd=td)
+            ok = p.stdout == want_out and p.returncode == 7
+            report("COMMAND$/END code [c]", ok,
+                   f"stdout={p.stdout!r} exit={p.returncode}" if not ok else "")
+
+        # --- x64 バックエンド (wine) ---
+        if not do_x64:
+            return
+        asm = tmp / "t.asm"
+        obj = tmp / "t.obj"
+        wexe = tmp / "t.exe"
+        p = compile_bas(src, "x64", asm, False)
+        if p.returncode == 0:
+            p = run([tools["nasm"], "-f", "win64", str(asm), "-o", str(obj)])
+        if p.returncode == 0:
+            p = run([tools["mingw"], "-I", str(RUNTIME), str(obj),
+                     str(RUNTIME / "nbrt.c"), "-o", str(wexe)])
+        if p.returncode != 0:
+            report("COMMAND$/END code [x64]", False, p.stderr)
+            return
+        wine_env = dict(os.environ, WINEDEBUG="-all")
+        p = run([tools["wine"], str(wexe), *args], env=wine_env, cwd=td)
+        actual = p.stdout.replace("\r\n", "\n")
+        ok = actual == want_out and p.returncode == 7
+        report("COMMAND$/END code [x64]", ok,
+               f"stdout={actual!r} exit={p.returncode}" if not ok else "")
+
 
 def main() -> int:
     ap = argparse.ArgumentParser()
@@ -254,6 +324,7 @@ def main() -> int:
               " x64 クロス検証を省略します")
 
     golden_tests(tools, do_x64)
+    cli_tests(tools, do_x64)
     error_tests(tools)
 
     print()
