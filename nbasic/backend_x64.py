@@ -1,13 +1,24 @@
 """
-backend_x64.py — x86-64 バックエンド (IR → Windows x64 用 NASM ソース)
-======================================================================
+backend_x64.py — x86-64 バックエンド共通部 + Windows x64 (Microsoft ABI)
+========================================================================
 
-IR を NASM 構文のアセンブリへ変換する。ターゲットは **Windows x64
-(Microsoft x64 呼び出し規約)**。Linux/macOS から mingw-w64 でクロス
-コンパイルできる:
+IR を NASM 構文の x86-64 アセンブリへ変換する。x86-64 のバックエンドは
+2 つある:
 
-    nasm -f win64 out.asm -o out.obj
-    x86_64-w64-mingw32-gcc out.obj runtime/nbrt.c -o program.exe
+    backend_x64.py       : このファイル。共通のコード生成基盤
+                           (X64Backend) と Windows x64 版 (Win64Backend)
+    backend_x64_linux.py : Linux 版 (SysVBackend)。System V AMD64 ABI
+
+**命令選択・データ生成・フレーム構成は 2 つの OS で完全に共通**であり、
+違いは「関数の呼び出し規約 (引数をどのレジスタ/スタック位置で渡すか)」
+と ELF/COFF 固有のセクション指定だけである。そこで共通部を基底クラス
+X64Backend に置き、ABI 依存箇所を 4 つのフックに分離した:
+
+    _header_lines()     : 冒頭コメントとアセンブル手順
+    _out_area_bytes(f)  : フレーム下端に確保する呼び出し引数領域の大きさ
+    _spill_params(f)    : 関数入口で受け取った引数を自分のスロットへ退避
+    _emit_call(ins)     : call 命令 1 個の引数搬送と呼び出し
+    _emit_footer()      : ファイル末尾の OS 固有セクション
 
 コード生成戦略 — 「スタックマシン式」の素朴なコード生成
 --------------------------------------------------------
@@ -24,34 +35,30 @@ IR を NASM 構文のアセンブリへ変換する。ターゲットは **Windo
 C バックエンド + 最適化コンパイラを使えばよい、という役割分担である
 (docs/ARCHITECTURE.md §6)。
 
-スクラッチレジスタの取り決め:
-    rax, r10, r11 — 整数/ポインタ演算用 (すべて呼び出し側保存なので
-                    関数呼び出しをまたいで保持しない)
+スクラッチレジスタの取り決め (両 ABI で揮発なものだけを使う):
+    rax, r10, r11 — 整数/ポインタ演算用
     xmm0, xmm1    — 浮動小数演算用
-    xmm4          — 引数搬送時の浮動小数スクラッチ
 
-Microsoft x64 呼び出し規約 (要点):
-    - 整数/ポインタ引数: rcx, rdx, r8, r9 (第 1〜4)、以降スタック
-    - 浮動小数引数     : xmm0〜xmm3 (位置対応。第 2 引数が double なら
-                         xmm1 を使い rdx は使わない)
-    - 第 5 引数以降    : call 時の [rsp+32] から 8 バイト刻み
-    - シャドウ空間     : 呼び出し側が [rsp+0..31] に 32 バイト確保
-    - スタック整列     : call 命令の時点で rsp ≡ 0 (mod 16)
-    - 戻り値           : 整数/ポインタ → rax、double → xmm0
-    - 揮発レジスタ     : rax rcx rdx r8-r11 xmm0-5 (呼び出しで壊れる)
+スタックフレームのレイアウト (prologue 後、両 ABI 共通):
 
-スタックフレームのレイアウト (prologue 後):
-
-        [rbp+16+8i]   ← 呼び出し側が積んだ自分の引数 (i 番目、i≧0)
+        [rbp+16+8i]   ← 呼び出し側が積んだ自分のスタック渡し引数
         [rbp+8]       ← 戻り番地
         [rbp]         ← 保存された旧 rbp
         [rbp-8n]      ← 値スロット (VReg / ローカル VarSlot)
         ...
-        [rsp+32..]    ← 呼び出し先へ渡すスタック引数 (第 5 引数〜)
-        [rsp+0..31]   ← 呼び出し先のためのシャドウ空間
+        [rsp+..]      ← 呼び出し先へ渡す引数領域 (ABI 依存)
 
 `push rbp` の直後は rsp ≡ 0 (mod 16) なので、フレームサイズを
-16 の倍数にすれば call 時の整列条件が常に満たされる。
+16 の倍数にすれば call 時の整列条件 (両 ABI とも rsp ≡ 0 mod 16)
+が常に満たされる。
+
+Microsoft x64 呼び出し規約 (Win64Backend が実装):
+    - 整数/ポインタ引数: rcx, rdx, r8, r9 (第 1〜4)、以降スタック
+    - 浮動小数引数     : xmm0〜xmm3 (**位置対応**。第 2 引数が double
+                         なら xmm1 を使い rdx は使わない)
+    - 第 5 引数以降    : call 時の [rsp+32] から 8 バイト刻み
+    - シャドウ空間     : 呼び出し側が [rsp+0..31] に 32 バイト確保
+    - 戻り値           : 整数/ポインタ → rax、double → xmm0
 """
 
 from __future__ import annotations
@@ -70,10 +77,6 @@ _SETCC_INT = {"EQ": "sete", "NE": "setne", "LT": "setl",
               "LE": "setle", "GT": "setg", "GE": "setge"}
 _SETCC_FLT = {"EQ": "sete", "NE": "setne", "LT": "setb",
               "LE": "setbe", "GT": "seta", "GE": "setae"}
-
-# 整数引数レジスタ (Microsoft x64、位置対応)
-_ARG_GPR = ("rcx", "rdx", "r8", "r9")
-_ARG_XMM = ("xmm0", "xmm1", "xmm2", "xmm3")
 
 
 def _asm_bytes(data: bytes) -> str:
@@ -102,6 +105,8 @@ def _asm_bytes(data: bytes) -> str:
 
 
 class X64Backend:
+    """ABI 非依存の共通コード生成。サブクラスがフックを実装する。"""
+
     def __init__(self, ir: IRProgram):
         self.ir = ir
         self.lines: list[str] = []
@@ -114,14 +119,35 @@ class X64Backend:
     def _w(self, line: str = "") -> None:
         self.lines.append(line)
 
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # ABI フック (サブクラスが実装)
+    # ------------------------------------------------------------------
+
+    def _header_lines(self) -> list[str]:
+        raise NotImplementedError
+
+    def _out_area_bytes(self, f: IRFunc) -> int:
+        """フレーム下端に確保する「呼び出し先へ渡す引数」領域のバイト数。
+        16 の倍数で返すこと。"""
+        raise NotImplementedError
+
+    def _spill_params(self, f: IRFunc) -> None:
+        """関数入口: 受け取った引数を自分の値スロットへ退避する。"""
+        raise NotImplementedError
+
+    def _emit_call(self, ins: Ins) -> None:
+        raise NotImplementedError
+
+    def _emit_footer(self) -> None:
+        """ファイル末尾の OS 固有セクション (無ければ何もしない)。"""
+
+    # ------------------------------------------------------------------
     # 出力全体
-    # ==================================================================
+    # ------------------------------------------------------------------
 
     def generate(self) -> str:
-        self._w("; NBASIC-21 コンパイラが生成した Windows x64 アセンブリ")
-        self._w("; アセンブル: nasm -f win64 このファイル")
-        self._w("; リンク    : x86_64-w64-mingw32-gcc out.obj nbrt.c -o out.exe")
+        for line in self._header_lines():
+            self._w(line)
         self._w("bits 64")
         self._w("default rel                 ; メモリ参照は既定で RIP 相対")
         self._w()
@@ -144,6 +170,7 @@ class X64Backend:
 
         # ---- データ ----
         self._emit_data_section()
+        self._emit_footer()
         return "\n".join(self.lines) + "\n"
 
     def _collect_externs(self) -> set[str]:
@@ -207,9 +234,9 @@ class X64Backend:
         self._w("; ---- 定数マスク ----")
         self._w("nb_negmask: dq 0x8000000000000000")
 
-    # ==================================================================
+    # ------------------------------------------------------------------
     # オペランドのアドレッシング
-    # ==================================================================
+    # ------------------------------------------------------------------
 
     def _float_label(self, v: float) -> str:
         bits = struct.unpack("<Q", struct.pack("<d", v))[0]
@@ -260,9 +287,9 @@ class X64Backend:
     def _store_flt(self, dest: Value, xmm: str) -> None:
         self._w(f"    movsd {self._slot_addr(dest)}, {xmm}")
 
-    # ==================================================================
+    # ------------------------------------------------------------------
     # 関数 1 個
-    # ==================================================================
+    # ------------------------------------------------------------------
 
     def _emit_func(self, f: IRFunc) -> None:
         # ---- スロット割り付け ----
@@ -278,16 +305,8 @@ class X64Backend:
             self.slot_off[self._slot_key(r)] = off
         locals_bytes = -off
 
-        # ---- 呼び出し引数領域の最大サイズ ----
-        # シャドウ空間 32 バイト + 第 5 引数以降。関数内の全 call の最大。
-        max_args = 0
-        for ins in f.body:
-            if ins.op == "call":
-                max_args = max(max_args, len(ins.args))
-        # 呼び出しが 1 つも無くても 32 バイト確保しておく (無害で単純)
-        out_bytes = 32 + max(0, max_args - 4) * 8
-
         # フレーム = ローカル領域 + 引数領域、16 バイト整列 (冒頭コメント)
+        out_bytes = self._out_area_bytes(f)
         self.frame_size = (locals_bytes + out_bytes + 15) & ~15
 
         # ---- プロローグ ----
@@ -295,21 +314,7 @@ class X64Backend:
         self._w("    push rbp")
         self._w("    mov rbp, rsp")
         self._w(f"    sub rsp, {self.frame_size}")
-
-        # 受け取った引数を自分のスロットへ退避する。
-        # 第 1〜4 引数はレジスタ (double なら xmm 側)、以降は
-        # 呼び出し側のスタック [rbp+16+8i] にある。
-        for i, p in enumerate(f.params):
-            if i < 4:
-                if p.ty == D:
-                    self._store_flt(p, _ARG_XMM[i])
-                else:
-                    self._store_int(p, _ARG_GPR[i])
-            else:
-                # +16 = 旧 rbp と戻り番地の分。+32 はシャドウ空間で、
-                # 第 5 引数はその直後に積まれている。
-                self._w(f"    mov rax, [rbp+{16 + 32 + 8 * (i - 4)}]")
-                self._store_int(p, "rax")
+        self._spill_params(f)
         self._w()
 
         for ins in f.body:
@@ -318,9 +323,9 @@ class X64Backend:
         # ret 命令が必ず出力されているので、ここには落ちてこない。
         self._w()
 
-    # ==================================================================
-    # 命令 1 個
-    # ==================================================================
+    # ------------------------------------------------------------------
+    # 命令 1 個 (ABI 非依存)
+    # ------------------------------------------------------------------
 
     def _emit_ins(self, f: IRFunc, ins: Ins) -> None:
         op = ins.op
@@ -450,11 +455,64 @@ class X64Backend:
 
         raise AssertionError(f"unknown IR op {op}")
 
+    def _store_call_result(self, ins: Ins) -> None:
+        """call の戻り値 (rax / xmm0) を格納する。両 ABI 共通。"""
+        if ins.dest is not None:
+            if value_type(ins.dest) == D:
+                self._store_flt(ins.dest, "xmm0")
+            else:
+                self._store_int(ins.dest, "rax")
+
+
+# ======================================================================
+# Windows x64 (Microsoft ABI)
+# ======================================================================
+
+# 整数引数レジスタ (Microsoft x64、位置対応)
+_WIN_ARG_GPR = ("rcx", "rdx", "r8", "r9")
+_WIN_ARG_XMM = ("xmm0", "xmm1", "xmm2", "xmm3")
+
+
+class Win64Backend(X64Backend):
+    """Microsoft x64 呼び出し規約 (モジュール冒頭コメント参照)。"""
+
+    def _header_lines(self) -> list[str]:
+        return [
+            "; NBASIC-21 コンパイラが生成した Windows x64 アセンブリ",
+            "; アセンブル: nasm -f win64 このファイル",
+            "; リンク    : x86_64-w64-mingw32-gcc out.obj nbrt.c -o out.exe",
+        ]
+
+    def _out_area_bytes(self, f: IRFunc) -> int:
+        # シャドウ空間 32 バイト + 第 5 引数以降。関数内の全 call の最大。
+        # 呼び出しが 1 つも無くても 32 バイト確保しておく (無害で単純)。
+        max_args = 0
+        for ins in f.body:
+            if ins.op == "call":
+                max_args = max(max_args, len(ins.args))
+        out = 32 + max(0, max_args - 4) * 8
+        return (out + 15) & ~15
+
+    def _spill_params(self, f: IRFunc) -> None:
+        # 受け取った引数を自分のスロットへ退避する。
+        # 第 1〜4 引数はレジスタ (double なら xmm 側)、以降は
+        # 呼び出し側のスタック [rbp+16+32+8(i-4)] にある
+        # (+16 = 旧 rbp と戻り番地、+32 = シャドウ空間)。
+        for i, p in enumerate(f.params):
+            if i < 4:
+                if p.ty == D:
+                    self._store_flt(p, _WIN_ARG_XMM[i])
+                else:
+                    self._store_int(p, _WIN_ARG_GPR[i])
+            else:
+                self._w(f"    mov rax, [rbp+{16 + 32 + 8 * (i - 4)}]")
+                self._store_int(p, "rax")
+
     def _emit_call(self, ins: Ins) -> None:
         """Microsoft x64 規約での関数呼び出し。
 
         すべての引数値はスロットか定数にあるので、好きな順に搬送できる。
-        スクラッチ (rax/xmm4) を使う第 5 引数以降を先に積み、その後で
+        スクラッチ (rax) を使う第 5 引数以降を先に積み、その後で
         引数レジスタを埋める (逆順だと搬送でレジスタを壊しかねない)。
         """
         w = self._w
@@ -473,20 +531,14 @@ class X64Backend:
             if i >= 4:
                 break
             if value_type(v) == D:
-                self._load_flt(_ARG_XMM[i], v)
+                self._load_flt(_WIN_ARG_XMM[i], v)
             else:
-                self._load_int(_ARG_GPR[i], v)
+                self._load_int(_WIN_ARG_GPR[i], v)
 
         w(f"    call {ins.extra}")
-
-        # ---- 戻り値 ----
-        if ins.dest is not None:
-            if value_type(ins.dest) == D:
-                self._store_flt(ins.dest, "xmm0")
-            else:
-                self._store_int(ins.dest, "rax")
+        self._store_call_result(ins)
 
 
 def generate(ir: IRProgram) -> str:
-    """モジュールの公開エントリポイント: IR → NASM ソース文字列。"""
-    return X64Backend(ir).generate()
+    """モジュールの公開エントリポイント: IR → NASM (Windows x64)。"""
+    return Win64Backend(ir).generate()
