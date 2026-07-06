@@ -13,10 +13,13 @@
   終了コード (`END 式`)、標準入力の EOF 検査 (`EOF(0)`)
 - **TUI 向け**: `CLS`/`LOCATE`/`COLOR` (ANSI、Windows 10+ の VT モード
   自動有効化)、ノンブロッキングキー入力 `INKEY$`、`SLEEP`
-- **2 つのバックエンド** (共通の三番地コード IR から生成):
-  - **C** — 可搬。手元の cc でビルドしてどこでも実行
-  - **x86-64** — Windows x64 (Microsoft 呼び出し規約) 向け NASM
-    アセンブリ。Linux/macOS から mingw-w64 でクロスコンパイル可能
+- **3 つのバックエンド** (共通の三番地コード IR から生成):
+  - **C** — 可搬。手元の cc でビルドしてどこでも実行 (macOS/ARM も
+    こちらで)
+  - **x86-64 Windows** — Microsoft x64 呼び出し規約の NASM アセンブリ。
+    Linux/macOS から mingw-w64 でクロスコンパイル可能
+  - **x86-64 Linux** — System V AMD64 ABI の NASM アセンブリ。
+    nasm + gcc/clang でネイティブビルド
 
 ```
 .bas → 字句解析 → 構文解析 → 意味解析 → IR → 最適化(-O) → C / x64 asm
@@ -46,6 +49,15 @@ python3 -m nbasic -t x64 -O examples/fizzbuzz.bas   # → examples/fizzbuzz.asm
 nasm -f win64 examples/fizzbuzz.asm -o fizzbuzz.obj
 x86_64-w64-mingw32-gcc -I runtime fizzbuzz.obj runtime/nbrt.c -o fizzbuzz.exe
 wine fizzbuzz.exe        # または Windows 上で実行
+```
+
+### x86-64 Linux ターゲット (ネイティブアセンブリ)
+
+```sh
+python3 -m nbasic -t x64-linux -O examples/fizzbuzz.bas
+nasm -f elf64 examples/fizzbuzz.asm -o fizzbuzz.o
+gcc fizzbuzz.o runtime/nbrt.c -lm -o fizzbuzz
+./fizzbuzz
 ```
 
 Windows 上でセルフビルドする場合は最後のリンクを
@@ -123,7 +135,8 @@ nbasic/            コンパイラ本体 (Python パッケージ)
   irgen.py           IR 生成 (低水準化)
   optimizer.py       IR 最適化 (-O)
   backend_c.py       C コード生成
-  backend_x64.py     x86-64 (Win64/NASM) コード生成
+  backend_x64.py     x86-64 共通基盤 + Windows x64 (Microsoft ABI)
+  backend_x64_linux.py  x86-64 Linux (System V ABI)
   driver.py          CLI / パイプライン結線
 runtime/           C ランタイムライブラリ (両バックエンド共通)
   nbrt.h nbrt.c      文字列・配列・入出力・数値検査・GOSUB スタック

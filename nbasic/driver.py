@@ -14,10 +14,12 @@ driver.py — コンパイラドライバ (パイプラインの結線と CLI)
 
 その後のビルド:
 
-    C 出力     : cc -O2 プログラム.c runtime/nbrt.c -lm -o プログラム
-    x64 出力   : nasm -f win64 プログラム.asm -o プログラム.obj
-                 x86_64-w64-mingw32-gcc プログラム.obj runtime/nbrt.c \\
-                     -o プログラム.exe
+    C 出力         : cc -O2 プログラム.c runtime/nbrt.c -lm -o プログラム
+    x64 出力       : nasm -f win64 プログラム.asm -o プログラム.obj
+                     x86_64-w64-mingw32-gcc プログラム.obj runtime/nbrt.c \\
+                         -o プログラム.exe
+    x64-linux 出力 : nasm -f elf64 プログラム.asm -o プログラム.o
+                     gcc プログラム.o runtime/nbrt.c -lm -o プログラム
 """
 
 from __future__ import annotations
@@ -33,6 +35,7 @@ from . import irgen as irgen_mod
 from . import optimizer as optimizer_mod
 from . import backend_c
 from . import backend_x64
+from . import backend_x64_linux
 from .ir import IRProgram
 
 
@@ -48,12 +51,20 @@ def compile_to_ir(source: str, optimize: bool = False) -> IRProgram:
 
 def compile_source(source: str, target: str = "c",
                    optimize: bool = False) -> str:
-    """ソース文字列を指定ターゲットのコードに変換する (ライブラリ API)。"""
+    """ソース文字列を指定ターゲットのコードに変換する (ライブラリ API)。
+
+    target:
+        "c"         — 可搬な C ソース (どの OS でもホストの cc でビルド)
+        "x64"       — Windows x64 用 NASM (Microsoft ABI)
+        "x64-linux" — Linux x86-64 用 NASM (System V ABI)
+    """
     ir = compile_to_ir(source, optimize)
     if target == "c":
         return backend_c.generate(ir)
     if target == "x64":
         return backend_x64.generate(ir)
+    if target == "x64-linux":
+        return backend_x64_linux.generate(ir)
     raise ValueError(f"unknown target: {target}")
 
 
@@ -63,8 +74,11 @@ def main(argv: list[str] | None = None) -> int:
         description="NBASIC-21 コンパイラ — 行番号付き BASIC を "
                     "C または Windows x64 アセンブリへコンパイルする")
     ap.add_argument("input", help="入力の BASIC ソースファイル (.bas)")
-    ap.add_argument("-t", "--target", choices=("c", "x64"), default="c",
-                    help="出力ターゲット (既定: c)")
+    ap.add_argument("-t", "--target",
+                    choices=("c", "x64", "x64-linux"), default="c",
+                    help="出力ターゲット: c = C ソース / "
+                         "x64 = Windows x64 NASM / "
+                         "x64-linux = Linux x86-64 NASM (既定: c)")
     ap.add_argument("-o", "--output",
                     help="出力ファイル名 (既定: 入力名の拡張子を差し替え)")
     ap.add_argument("-O", "--optimize", action="store_true",

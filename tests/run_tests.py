@@ -13,7 +13,8 @@ run_tests.py — NBASIC-21 コンパイラの統合テストランナー
 2. クロス検証 (ツールが揃っている場合のみ)
    同じプログラムを x64 バックエンド (NASM/Win64) でビルドし、wine で
    実行して同一の出力になることを確認する。Windows の改行 (CRLF) は
-   比較前に LF へ正規化する。
+   比較前に LF へ正規化する。さらに Linux x86-64 上では x64-linux
+   バックエンド (NASM/System V) でもビルドし、ネイティブ実行で検証する。
 
 3. エラーテスト
    コンパイルエラー・実行時エラーが正しく報告されることを、本ファイル
@@ -28,6 +29,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -82,7 +84,7 @@ def find_tools() -> dict[str, str | None]:
 # 1 + 2: ゴールデンテストとクロス検証
 # ----------------------------------------------------------------------
 
-def golden_tests(tools: dict, do_x64: bool) -> None:
+def golden_tests(tools: dict, do_x64: bool, do_linux: bool) -> None:
     cases = sorted((ROOT / "examples").glob("*.bas")) \
         + sorted((ROOT / "tests" / "cases").glob("*.bas"))
     print(f"== ゴールデンテスト ({len(cases)} ケース) ==")
@@ -122,7 +124,36 @@ def golden_tests(tools: dict, do_x64: bool) -> None:
                        f"--- expected ---\n{expected}--- actual ---\n"
                        f"{p.stdout}(exit={p.returncode})" if not ok else "")
 
-            # ---- x64 バックエンド (クロス検証) ----
+            # ---- x64-linux バックエンド (ネイティブ実行で検証) ----
+            if do_linux:
+                for opt in (False, True):
+                    tag = f"{src.name} [x64-linux{'/-O' if opt else ''}]"
+                    asm = tmp / f"{src.stem}_l{'_o' if opt else ''}.asm"
+                    obj = asm.with_suffix(".o")
+                    exe = asm.with_suffix("")
+                    p = compile_bas(src, "x64-linux", asm, opt)
+                    if p.returncode != 0:
+                        report(tag, False, p.stderr)
+                        continue
+                    p = run([tools["nasm"], "-f", "elf64", str(asm),
+                             "-o", str(obj)])
+                    if p.returncode != 0:
+                        report(tag, False, p.stderr)
+                        continue
+                    p = run([tools["cc"], str(obj),
+                             str(RUNTIME / "nbrt.c"), "-lm",
+                             "-o", str(exe)])
+                    if p.returncode != 0:
+                        report(tag, False, p.stderr)
+                        continue
+                    p = run([str(exe)], input=stdin_text, cwd=td)
+                    ok = p.stdout == expected and p.returncode == 0
+                    report(tag, ok,
+                           f"--- expected ---\n{expected}--- actual ---\n"
+                           f"{p.stdout}(exit={p.returncode})" if not ok
+                           else "")
+
+            # ---- x64 バックエンド (Windows / wine でクロス検証) ----
             if not do_x64:
                 continue
             for opt in (False, True):
@@ -254,7 +285,7 @@ def error_tests(tools: dict) -> None:
 # コマンドライン引数と終了コード (ゴールデンテストの枠に収まらないもの)
 # ----------------------------------------------------------------------
 
-def cli_tests(tools: dict, do_x64: bool) -> None:
+def cli_tests(tools: dict, do_x64: bool, do_linux: bool) -> None:
     """COMMAND$ と END 終了コードのテスト。実行時に引数を渡し、
     プロセスの終了コードを検査する必要があるため専用に行う。"""
     print("== CLI テスト (COMMAND$ / END 終了コード) ==")
@@ -282,6 +313,27 @@ def cli_tests(tools: dict, do_x64: bool) -> None:
             ok = p.stdout == want_out and p.returncode == 7
             report("COMMAND$/END code [c]", ok,
                    f"stdout={p.stdout!r} exit={p.returncode}" if not ok else "")
+
+        # --- x64-linux バックエンド (ネイティブ) ---
+        if do_linux:
+            asm = tmp / "tl.asm"
+            obj = tmp / "tl.o"
+            lexe = tmp / "tl"
+            p = compile_bas(src, "x64-linux", asm, False)
+            if p.returncode == 0:
+                p = run([tools["nasm"], "-f", "elf64", str(asm),
+                         "-o", str(obj)])
+            if p.returncode == 0:
+                p = run([tools["cc"], str(obj), str(RUNTIME / "nbrt.c"),
+                         "-lm", "-o", str(lexe)])
+            if p.returncode != 0:
+                report("COMMAND$/END code [x64-linux]", False, p.stderr)
+            else:
+                p = run([str(lexe), *args], cwd=td)
+                ok = p.stdout == want_out and p.returncode == 7
+                report("COMMAND$/END code [x64-linux]", ok,
+                       f"stdout={p.stdout!r} exit={p.returncode}"
+                       if not ok else "")
 
         # --- x64 バックエンド (wine) ---
         if not do_x64:
@@ -321,10 +373,18 @@ def main() -> int:
         tools[k] for k in ("nasm", "mingw", "wine"))
     if not do_x64:
         print("注意: nasm / x86_64-w64-mingw32-gcc / wine が揃っていないため"
-              " x64 クロス検証を省略します")
+              " x64 (Windows) クロス検証を省略します")
 
-    golden_tests(tools, do_x64)
-    cli_tests(tools, do_x64)
+    # x64-linux はホストがまさに Linux x86-64 のときだけネイティブ検証
+    do_linux = (not args.no_x64 and tools["nasm"] is not None
+                and sys.platform.startswith("linux")
+                and platform.machine() in ("x86_64", "AMD64"))
+    if not do_linux:
+        print("注意: Linux x86-64 + nasm ではないため"
+              " x64-linux ネイティブ検証を省略します")
+
+    golden_tests(tools, do_x64, do_linux)
+    cli_tests(tools, do_x64, do_linux)
     error_tests(tools)
 
     print()
