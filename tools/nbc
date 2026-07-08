@@ -1,0 +1,87 @@
+#!/bin/sh
+# ==========================================================================
+# nbc — NBASIC-21 かんたんビルドコマンド (Linux / macOS 用)
+# ==========================================================================
+#
+# 教科書 (docs/book/) の読者向けに、「コンパイル → C コンパイラで
+# ビルド → 実行」の 3 手順を 1 コマンドにまとめたラッパー。
+#
+#   使い方:
+#     tools/nbc run  プログラム.bas [引数...]   コンパイルして実行
+#     tools/nbc build プログラム.bas            実行ファイルを作るだけ
+#     tools/nbc check プログラム.bas            エラー検査だけ (何も作らない)
+#
+# 生成される実行ファイルはプログラムと同じ場所に、拡張子なしの
+# 同じ名前でできる (hello.bas → hello)。
+#
+# Windows の人は tools\nbc.bat を使うこと (中身は同じ動き)。
+# ==========================================================================
+
+set -e   # 途中のコマンドが失敗したらそこで止まる
+
+# --- このスクリプトの場所からリポジトリのルートを求める ---
+# (どのディレクトリから呼ばれても動くようにするため)
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+ROOT=$(dirname -- "$SCRIPT_DIR")
+
+# コンパイラ (nbasic パッケージ) をどこからでも import できるようにする
+PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
+export PYTHONPATH
+
+# --- 使う道具を探す: Python と C コンパイラ ---
+if command -v python3 >/dev/null 2>&1; then
+    PYTHON=python3
+elif command -v python >/dev/null 2>&1; then
+    PYTHON=python
+else
+    echo "nbc: Python が見つかりません。docs/book/01-setup.md を見てください" >&2
+    exit 1
+fi
+
+if command -v cc >/dev/null 2>&1; then
+    CC=cc
+elif command -v gcc >/dev/null 2>&1; then
+    CC=gcc
+elif command -v clang >/dev/null 2>&1; then
+    CC=clang
+else
+    echo "nbc: C コンパイラ (gcc など) が見つかりません。docs/book/01-setup.md を見てください" >&2
+    exit 1
+fi
+
+# --- 引数の確認 ---
+MODE=$1
+SRC=$2
+if [ -z "$MODE" ] || [ -z "$SRC" ]; then
+    echo "使い方: tools/nbc run|build|check プログラム.bas [実行時の引数...]" >&2
+    exit 1
+fi
+shift 2   # 残りの引数 ($@) はプログラム自身への引数になる
+
+case "$MODE" in
+  check)
+    # エラー検査だけ。問題なければ何も表示しない (それが「合格」)
+    exec "$PYTHON" -m nbasic --check "$SRC"
+    ;;
+  run|build)
+    # 出力の名前: プログラム.bas → プログラム (拡張子を外す)
+    BASE=${SRC%.bas}
+    # 相対パスに ./ を付ける (exec が PATH を探しに行かないように)
+    case "$BASE" in
+      /*) ;;
+      *) BASE="./$BASE" ;;
+    esac
+    "$PYTHON" -m nbasic -O -o "$BASE.c" "$SRC" >/dev/null
+    "$CC" -O2 -I "$ROOT/runtime" "$BASE.c" "$ROOT/runtime/nbrt.c" -lm -o "$BASE"
+    rm -f "$BASE.c"          # 途中でできる C ファイルは片付ける
+    if [ "$MODE" = "build" ]; then
+        echo "できました: $BASE"
+    else
+        exec "$BASE" "$@"
+    fi
+    ;;
+  *)
+    echo "nbc: '$MODE' というコマンドはありません (run / build / check)" >&2
+    exit 1
+    ;;
+esac

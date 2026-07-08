@@ -120,8 +120,14 @@ END FUNCTION
 
 | ファイル | 内容 |
 |---|---|
+| [docs/book/](docs/book/README.md) | **入門教科書 (本 1 冊分)** — 未経験者向け。セットアップから探索・ソートなどのアルゴリズム、CLI ツール、スネークゲーム・ToDo アプリの制作まで全 16 章 + 付録 |
 | [docs/SPEC.md](docs/SPEC.md) | 言語仕様書 (字句規則・型・演算子・全文法 EBNF・組込関数・エラー一覧) |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | コンパイラ内部設計 (IR 仕様・ランタイム ABI・各バックエンドの戦略) |
+
+プログラミング自体が初めての人は、教科書の
+[第 1 章「道具をそろえる」](docs/book/01-setup.md) から始めてください。
+`tools/nbc run プログラム.bas` の 1 コマンド (Windows は
+`tools\nbc`) でコンパイルから実行までできます。
 
 ## リポジトリ構成
 
@@ -142,8 +148,11 @@ runtime/           C ランタイムライブラリ (両バックエンド共通
   nbrt.h nbrt.c      文字列・配列・入出力・数値検査・GOSUB スタック
 examples/          サンプルプログラム
 docs/              言語仕様・内部設計
-tests/             統合テスト (ゴールデン + x64 クロス検証 + エラー)
+docs/book/         入門教科書 (全 16 章 + 付録)
+tests/             統合テスト (ゴールデン + x64 クロス検証 + エラー
+                   + 教科書コード例の全数検査)
 editors/vscode/    VS Code 拡張 (ハイライト・診断・F5 実行・IR 表示)
+tools/nbc          かんたんビルドコマンド (nbc run プログラム.bas)
 ```
 
 ## テスト

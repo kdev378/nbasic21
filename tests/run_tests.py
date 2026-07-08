@@ -358,6 +358,15 @@ def cli_tests(tools: dict, do_x64: bool, do_linux: bool) -> None:
                f"stdout={actual!r} exit={p.returncode}" if not ok else "")
 
 
+def book_tests() -> None:
+    """教科書 (docs/book/) のコード例の全数コンパイル検査。"""
+    print("== 教科書コード検査 (docs/book/) ==")
+    p = run([sys.executable, str(ROOT / "tests" / "check_book.py")])
+    ok = p.returncode == 0
+    report("docs/book のコード例", ok,
+           (p.stdout + p.stderr) if not ok else "")
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--no-x64", action="store_true",
@@ -386,6 +395,7 @@ def main() -> int:
     golden_tests(tools, do_x64, do_linux)
     cli_tests(tools, do_x64, do_linux)
     error_tests(tools)
+    book_tests()
 
     print()
     print(f"結果: {n_pass} passed, {n_fail} failed")
